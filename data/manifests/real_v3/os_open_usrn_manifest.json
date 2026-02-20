@@ -1,0 +1,18 @@
+{
+  "source_name": "os_open_usrn",
+  "source_version": "osopenusrn_202602",
+  "retrieved_at_utc": "2026-02-20T22:41:35Z",
+  "source_url": "https://api.os.uk/downloads/v1/products/OpenUSRN/downloads?area=GB&format=GeoPackage&redirect",
+  "processing_git_sha": "ce2b72877a34457e9e02ffcafcd26d02bac92f03",
+  "notes": "Real source ingest manifest generated locally.",
+  "files": [
+    {
+      "file_role": "open_usrn_gpkg",
+      "file_path": "/Users/jamie/code/postcod.es/data/source_files/real/open_usrn/osopenusrn_202602.gpkg",
+      "sha256": "fdd6af3efa38ad116d4c7cf436291c4094f654d6f2aaeb218c7bdd862356828e",
+      "size_bytes": 1005912064,
+      "format": "gpkg",
+      "layer_name": "openUSRN"
+    }
+  ]
+}

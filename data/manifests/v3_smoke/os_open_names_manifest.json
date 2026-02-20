@@ -1,0 +1,18 @@
+{
+  "source_name": "os_open_names",
+  "source_version": "v3_smoke_2026_02_20",
+  "retrieved_at_utc": "2026-02-20T22:19:05Z",
+  "source_url": "local://v3_smoke/os_open_names",
+  "processing_git_sha": "ce2b72877a34457e9e02ffcafcd26d02bac92f03",
+  "notes": "Synthetic smoke dataset for V3 ingest/build validation",
+  "files": [
+    {
+      "file_role": "primary",
+      "file_path": "/Users/jamie/code/postcod.es/data/source_files/v3_smoke/os_open_names.csv",
+      "sha256": "f4440114144336b2fbbd6d6955086820616b7a880c620941a79e74b83fb80499",
+      "size_bytes": 81,
+      "format": "csv",
+      "row_count_expected": 1
+    }
+  ]
+}

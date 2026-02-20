@@ -1,0 +1,12 @@
+{
+  "build_profile": "gb_core",
+  "source_runs": {
+    "onspd": "a49f5198-1b1f-4cf5-b9f2-82b450aa9f73",
+    "os_open_usrn": "60bd0c02-e110-4bfe-b96d-3bebc14516b8",
+    "os_open_names": "420f6591-24ba-42b8-8a13-3658c9ef0c02",
+    "os_open_roads": "95119ff1-33cc-4341-b21a-97df73853ac5",
+    "os_open_uprn": "4a2bef4c-9adc-4427-a11e-e65104b7e86a",
+    "os_open_linked_identifiers": "6ccc48d1-80e4-4336-a985-7c720781c9fb",
+    "nsul": "0f24c6e9-ba4c-4d63-baf0-388bbda197b6"
+  }
+}

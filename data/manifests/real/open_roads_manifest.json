@@ -1,0 +1,15 @@
+{
+  "dataset_key": "open_roads",
+  "release_id": "open_roads_unknown_20260220_ebbaaaff",
+  "source_url": "https://api.os.uk/downloads/v1/products/OpenRoads/downloads?area=GB&format=GeoPackage&redirect",
+  "licence": "http://os.uk/opendata/licence",
+  "file_path": "/Users/jamie/code/postcod.es/data/source_files/real/open_roads/Data/oproad_gb.gpkg",
+  "expected_sha256": "25cfcf41ce89d49a1714798b25db93d4100b98ff0b07ec6debd20b602c01cc22",
+  "format": "gpkg",
+  "layer_name": "road_link",
+  "expected_srid": 27700,
+  "column_map": {
+    "source_id": "id",
+    "name_display": "name_1"
+  }
+}

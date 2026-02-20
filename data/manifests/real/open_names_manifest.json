@@ -1,0 +1,19 @@
+{
+  "dataset_key": "open_names",
+  "release_id": "open_names_unknown_20260220_aefc8ad3",
+  "source_url": "https://api.os.uk/downloads/v1/products/OpenNames/downloads?area=GB&format=CSV&redirect",
+  "licence": "http://os.uk/opendata/licence",
+  "file_path": "/Users/jamie/code/postcod.es/data/source_files/real/open_names/opname_gb_combined.csv",
+  "expected_sha256": "aefc8ad337e23f1ba7debab45243c2dc2302a4aa95ef7c86d80daaa65f535e05",
+  "format": "csv",
+  "column_map": {
+    "entry_id": "ID",
+    "name1": "NAME1",
+    "name1_lang": "NAME1_LANG",
+    "name2": "NAME2",
+    "local_type": "LOCAL_TYPE",
+    "geometry_x": "GEOMETRY_X",
+    "geometry_y": "GEOMETRY_Y",
+    "postcode_district": "POSTCODE_DISTRICT"
+  }
+}

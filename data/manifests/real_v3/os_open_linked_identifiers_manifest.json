@@ -1,0 +1,24 @@
+{
+  "source_name": "os_open_linked_identifiers",
+  "source_version": "lids_2026_02",
+  "retrieved_at_utc": "2026-02-20T22:41:35Z",
+  "source_url": "https://api.os.uk/downloads/v1/products/LIDS/downloads?area=GB&format=CSV",
+  "processing_git_sha": "ce2b72877a34457e9e02ffcafcd26d02bac92f03",
+  "notes": "Real source ingest manifest generated locally.",
+  "files": [
+    {
+      "file_role": "lids_toid_usrn",
+      "file_path": "/Users/jamie/code/postcod.es/data/source_files/real/lids/Road_TOID_Street_USRN_10.csv",
+      "sha256": "54c03a54c7da5b3e8b13316b3f9357f34f562a57c7cd3d37dfbe2c4e17454462",
+      "size_bytes": 181488324,
+      "format": "csv"
+    },
+    {
+      "file_role": "lids_uprn_usrn",
+      "file_path": "/Users/jamie/code/postcod.es/data/source_files/real/lids/BLPU_UPRN_Street_USRN_11.csv",
+      "sha256": "1243cd8fce256275491050071200c88d72fc1de2380593f3356f72bba5079fec",
+      "size_bytes": 5061603216,
+      "format": "csv"
+    }
+  ]
+}

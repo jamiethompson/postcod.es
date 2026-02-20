@@ -1,0 +1,16 @@
+{
+  "dataset_key": "open_uprn",
+  "release_id": "2026-Q1-E2E-P2",
+  "source_url": "https://example.local/open-uprn-sample",
+  "licence": "OGL v3.0",
+  "file_path": "/Users/jamie/code/postcod.es/data/source_files/e2e/open_uprn_sample.csv",
+  "expected_sha256": "7b40b6398d8db405d3078a1c12a9368c02b46b72de3ee663ab3403b82c89b2c9",
+  "format": "csv",
+  "column_map": {
+    "uprn": "UPRN_REF",
+    "latitude": "LAT",
+    "longitude": "LON",
+    "easting": "EASTING",
+    "northing": "NORTHING"
+  }
+}

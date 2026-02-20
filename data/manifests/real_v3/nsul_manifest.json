@@ -1,0 +1,87 @@
+{
+  "source_name": "nsul",
+  "source_version": "NSUL_JUL_2025_EPOCH_119",
+  "retrieved_at_utc": "2026-02-20T22:41:35Z",
+  "source_url": "https://www.arcgis.com/sharing/rest/content/items/0c5c2c6202464ae280da1a79c14ccca1/data",
+  "processing_git_sha": "ce2b72877a34457e9e02ffcafcd26d02bac92f03",
+  "notes": "Real source ingest manifest generated locally.",
+  "files": [
+    {
+      "file_role": "nsul_nsul_jul_2025_ee",
+      "file_path": "/Users/jamie/code/postcod.es/data/source_files/real/nsul/Data/NSUL_JUL_2025_EE.csv",
+      "sha256": "5751a9ec254c317203003dfea4a00ba6bbbf81fea51417edb042f97843bf43e9",
+      "size_bytes": 1232171370,
+      "format": "csv"
+    },
+    {
+      "file_role": "nsul_nsul_jul_2025_em",
+      "file_path": "/Users/jamie/code/postcod.es/data/source_files/real/nsul/Data/NSUL_JUL_2025_EM.csv",
+      "sha256": "438f34adbc54438f44111c7bbdbb35be8bbc2283b787327cfae8190adb0c6bb5",
+      "size_bytes": 956700215,
+      "format": "csv"
+    },
+    {
+      "file_role": "nsul_nsul_jul_2025_ln",
+      "file_path": "/Users/jamie/code/postcod.es/data/source_files/real/nsul/Data/NSUL_JUL_2025_LN.csv",
+      "sha256": "0c526371248ecebbef860325062c5b9b55a63f25c3cf0f911403f2e531ea456d",
+      "size_bytes": 1639724787,
+      "format": "csv"
+    },
+    {
+      "file_role": "nsul_nsul_jul_2025_ne",
+      "file_path": "/Users/jamie/code/postcod.es/data/source_files/real/nsul/Data/NSUL_JUL_2025_NE.csv",
+      "sha256": "e38300351fa95ebce52d59c11896af6496e7bf60c599a667c0598cae2f39cd62",
+      "size_bytes": 538777804,
+      "format": "csv"
+    },
+    {
+      "file_role": "nsul_nsul_jul_2025_nw",
+      "file_path": "/Users/jamie/code/postcod.es/data/source_files/real/nsul/Data/NSUL_JUL_2025_NW.csv",
+      "sha256": "6f6ee1412d111844ae793de42951ae154a427426c4e9ce7ba29f34568f52ffe6",
+      "size_bytes": 1447417131,
+      "format": "csv"
+    },
+    {
+      "file_role": "nsul_nsul_jul_2025_sc",
+      "file_path": "/Users/jamie/code/postcod.es/data/source_files/real/nsul/Data/NSUL_JUL_2025_SC.csv",
+      "sha256": "11b326f012f4b3968373d4e9aa725b8064b9123c85ca6f5230529b0582eb8d3e",
+      "size_bytes": 1185165031,
+      "format": "csv"
+    },
+    {
+      "file_role": "nsul_nsul_jul_2025_se",
+      "file_path": "/Users/jamie/code/postcod.es/data/source_files/real/nsul/Data/NSUL_JUL_2025_SE.csv",
+      "sha256": "e928ef90776c3faf05ec05f9ed1dbe2d8f010fcabcb4f7f0d3fe677c602e2d65",
+      "size_bytes": 1753125936,
+      "format": "csv"
+    },
+    {
+      "file_role": "nsul_nsul_jul_2025_sw",
+      "file_path": "/Users/jamie/code/postcod.es/data/source_files/real/nsul/Data/NSUL_JUL_2025_SW.csv",
+      "sha256": "f7fcb0edbf24fafbc193e1a732a51e6e8c28eefcffbc5a9e74b1c56357f96a3a",
+      "size_bytes": 1185083958,
+      "format": "csv"
+    },
+    {
+      "file_role": "nsul_nsul_jul_2025_wa",
+      "file_path": "/Users/jamie/code/postcod.es/data/source_files/real/nsul/Data/NSUL_JUL_2025_WA.csv",
+      "sha256": "dbdc2878aca7e61a21fbaaf9f6dc9b5b3b9294b842e2d5f564f9641fa1be39fe",
+      "size_bytes": 664426866,
+      "format": "csv"
+    },
+    {
+      "file_role": "nsul_nsul_jul_2025_wm",
+      "file_path": "/Users/jamie/code/postcod.es/data/source_files/real/nsul/Data/NSUL_JUL_2025_WM.csv",
+      "sha256": "c3f0f7d515b271031f9e2568618dfb2187d4a73d75958700fb803f77751652a2",
+      "size_bytes": 1115129412,
+      "format": "csv"
+    },
+    {
+      "file_role": "nsul_nsul_jul_2025_yh",
+      "file_path": "/Users/jamie/code/postcod.es/data/source_files/real/nsul/Data/NSUL_JUL_2025_YH.csv",
+      "sha256": "9993542006b9b85967f07899a1b0006ebc6dd1d4dc788b8f0eb033efe64d1565",
+      "size_bytes": 1146747103,
+      "format": "csv"
+    }
+  ]
+}

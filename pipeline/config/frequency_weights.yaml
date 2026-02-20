@@ -1,0 +1,12 @@
+{
+  "weights": {
+    "names_postcode_feature": 0.6,
+    "oli_toid_usrn": 0.9,
+    "uprn_usrn": 1.0,
+    "spatial_os_open_roads": 0.3,
+    "osni_gazetteer_direct": 0.6,
+    "spatial_dfi_highway": 0.3,
+    "ppd_parse_matched": 0.4,
+    "ppd_parse_unmatched": 0.2
+  }
+}

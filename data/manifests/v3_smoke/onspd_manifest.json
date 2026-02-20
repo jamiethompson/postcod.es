@@ -1,0 +1,18 @@
+{
+  "source_name": "onspd",
+  "source_version": "v3_smoke_2026_02_20",
+  "retrieved_at_utc": "2026-02-20T22:19:05Z",
+  "source_url": "local://v3_smoke/onspd",
+  "processing_git_sha": "ce2b72877a34457e9e02ffcafcd26d02bac92f03",
+  "notes": "Synthetic smoke dataset for V3 ingest/build validation",
+  "files": [
+    {
+      "file_role": "primary",
+      "file_path": "/Users/jamie/code/postcod.es/data/source_files/v3_smoke/onspd.csv",
+      "sha256": "c255cdcf57adb5f5531c0622d0bda81cb4166ccddd7b41f148737a752279fb8b",
+      "size_bytes": 186,
+      "format": "csv",
+      "row_count_expected": 1
+    }
+  ]
+}

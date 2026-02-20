@@ -1,0 +1,15 @@
+{
+  "dataset_key": "onsud",
+  "release_id": "ONSUD_NOV_2025",
+  "source_url": "https://www.arcgis.com/sharing/rest/content/items/9beb2361978146f8ac85da18d21ee266/data",
+  "licence": "https://www.ons.gov.uk/methodology/geography/licences",
+  "file_path": "/Users/jamie/code/postcod.es/data/source_files/real/onsud/ONSUD_NOV_2025_GB_COMBINED.csv",
+  "expected_sha256": "ef7f0c29e4a1439309f50e16eb20ecd3120c16bd6c7bbaf6e07b61e5a3e27b7e",
+  "format": "csv",
+  "column_map": {
+    "uprn": "UPRN",
+    "postcode": "PCDS",
+    "postcode_unit_easting": "GRIDGB1E",
+    "postcode_unit_northing": "GRIDGB1N"
+  }
+}

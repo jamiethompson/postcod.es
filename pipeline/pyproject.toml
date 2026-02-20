@@ -1,0 +1,21 @@
+[project]
+name = "postcodes-pipeline"
+version = "0.1.0"
+description = "Open-data import and transformation pipeline (Phase 1 + Phase 2 Open Names)"
+requires-python = ">=3.11"
+dependencies = [
+  "psycopg[binary]>=3.2,<4",
+]
+
+[project.scripts]
+pipeline = "pipeline.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"

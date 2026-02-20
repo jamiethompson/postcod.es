@@ -1,0 +1,19 @@
+{
+  "dataset_key": "open_names",
+  "release_id": "2026-Q1-E2E-P2",
+  "source_url": "https://example.local/open-names-sample",
+  "licence": "OGL v3.0",
+  "file_path": "/Users/jamie/code/postcod.es/data/source_files/e2e/open_names_sample.csv",
+  "expected_sha256": "b4ca5267fe2a4d7fefe68eca48e3df1bddc8e19d8ac7c99be0293ae2a5e39dac",
+  "format": "csv",
+  "column_map": {
+    "entry_id": "ON_ID",
+    "name1": "NAME1",
+    "name1_lang": "NAME1_LANG",
+    "name2": "NAME2",
+    "local_type": "LOCAL_TYPE",
+    "geometry_x": "GEOM_X",
+    "geometry_y": "GEOM_Y",
+    "postcode_district": "PC_DISTRICT"
+  }
+}

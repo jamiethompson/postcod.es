@@ -1,0 +1,107 @@
+{
+  "sources": {
+    "onspd": {
+      "required_fields": [
+        "postcode",
+        "status",
+        "lat",
+        "lon",
+        "easting",
+        "northing",
+        "country_iso2",
+        "country_iso3",
+        "subdivision_code",
+        "post_town",
+        "locality"
+      ],
+      "field_map": {
+        "postcode": "postcode",
+        "status": "status",
+        "lat": "lat",
+        "lon": "lon",
+        "easting": "easting",
+        "northing": "northing",
+        "country_iso2": "country_iso2",
+        "country_iso3": "country_iso3",
+        "subdivision_code": "subdivision_code",
+        "post_town": "post_town",
+        "locality": "locality"
+      }
+    },
+    "os_open_usrn": {
+      "required_fields": ["usrn", "street_name"],
+      "field_map": {
+        "usrn": "usrn",
+        "street_name": "street_name",
+        "street_class": "street_class",
+        "street_status": "street_status"
+      }
+    },
+    "os_open_names": {
+      "required_fields": ["feature_id", "street_name", "postcode"],
+      "field_map": {
+        "feature_id": "feature_id",
+        "toid": "toid",
+        "street_name": "street_name",
+        "postcode": "postcode"
+      }
+    },
+    "os_open_roads": {
+      "required_fields": ["segment_id", "road_name"],
+      "field_map": {
+        "segment_id": "segment_id",
+        "road_id": "road_id",
+        "usrn": "usrn",
+        "postcode": "postcode",
+        "road_name": "road_name"
+      }
+    },
+    "os_open_uprn": {
+      "required_fields": ["uprn"],
+      "field_map": {
+        "uprn": "uprn",
+        "postcode": "postcode"
+      }
+    },
+    "os_open_linked_identifiers": {
+      "required_fields": ["relation_type", "left_id", "right_id"],
+      "field_map": {
+        "relation_type": "relation_type",
+        "left_id": "left_id",
+        "right_id": "right_id"
+      }
+    },
+    "nsul": {
+      "required_fields": ["uprn", "postcode"],
+      "field_map": {
+        "uprn": "uprn",
+        "postcode": "postcode"
+      }
+    },
+    "osni_gazetteer": {
+      "required_fields": ["feature_id", "street_name"],
+      "field_map": {
+        "feature_id": "feature_id",
+        "postcode": "postcode",
+        "street_name": "street_name"
+      }
+    },
+    "dfi_highway": {
+      "required_fields": ["segment_id", "street_name"],
+      "field_map": {
+        "segment_id": "segment_id",
+        "postcode": "postcode",
+        "street_name": "street_name"
+      }
+    },
+    "ppd": {
+      "required_fields": ["row_hash", "postcode", "street", "house_number"],
+      "field_map": {
+        "row_hash": "row_hash",
+        "postcode": "postcode",
+        "street": "street",
+        "house_number": "house_number"
+      }
+    }
+  }
+}
