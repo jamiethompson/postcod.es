@@ -1,0 +1,15 @@
+/.idea/
+/.DS
+.DS_Store
+**/.DS_Store
+
+# Python caches and local build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Local datasets and generated source extracts
+/data/source_files/real/
+/data/source_files/e2e/
+/data/source_files/v3_smoke/
