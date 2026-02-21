@@ -3,7 +3,7 @@
 This section explains how datasets relate to each other, how data moves through ingest/stage/build passes, and what value is added at each step.
 
 ## Quick Links
-- Relationship map: [`relationships-overview.md`](relationships-overview.md)
+- Relationship map + Mermaid system diagram: [`relationships-overview.md`](relationships-overview.md)
 - End-to-end value by pass: [`value-added-by-stage.md`](value-added-by-stage.md)
 - Dataset index: [`datasets/README.md`](datasets/README.md)
 - Stage/pass index: [`stages/README.md`](stages/README.md)
