@@ -1230,8 +1230,8 @@ def _populate_stage_open_lids(
                         relation_hint,
                         (left_id IS NOT NULL AND left_id <> '') AS left_present,
                         (right_id IS NOT NULL AND right_id <> '') AS right_present,
-                        (lower(COALESCE(left_id, '')) LIKE 'osgb%') AS left_is_toid,
-                        (lower(COALESCE(right_id, '')) LIKE 'osgb%') AS right_is_toid,
+                        (lower(COALESCE(left_id, '')) LIKE 'osgb%%') AS left_is_toid,
+                        (lower(COALESCE(right_id, '')) LIKE 'osgb%%') AS right_is_toid,
                         (COALESCE(left_id, '') ~ '^[0-9]+$') AS left_is_digits,
                         (COALESCE(right_id, '') ~ '^[0-9]+$') AS right_is_digits
                     FROM extracted
