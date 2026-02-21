@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS meta.ingest_run (
         'os_open_names',
         'os_open_roads',
         'os_open_uprn',
-        'os_open_linked_identifiers',
+        'os_open_lids',
         'nsul',
         'osni_gazetteer',
         'dfi_highway',
@@ -99,7 +99,7 @@ CREATE TABLE IF NOT EXISTS meta.build_bundle_source (
         'os_open_names',
         'os_open_roads',
         'os_open_uprn',
-        'os_open_linked_identifiers',
+        'os_open_lids',
         'nsul',
         'osni_gazetteer',
         'dfi_highway',
@@ -185,7 +185,7 @@ CREATE TABLE IF NOT EXISTS raw.os_open_usrn_row (LIKE raw.onspd_row INCLUDING AL
 CREATE TABLE IF NOT EXISTS raw.os_open_names_row (LIKE raw.onspd_row INCLUDING ALL);
 CREATE TABLE IF NOT EXISTS raw.os_open_roads_row (LIKE raw.onspd_row INCLUDING ALL);
 CREATE TABLE IF NOT EXISTS raw.os_open_uprn_row (LIKE raw.onspd_row INCLUDING ALL);
-CREATE TABLE IF NOT EXISTS raw.os_open_linked_identifiers_row (LIKE raw.onspd_row INCLUDING ALL);
+CREATE TABLE IF NOT EXISTS raw.os_open_lids_row (LIKE raw.onspd_row INCLUDING ALL);
 CREATE TABLE IF NOT EXISTS raw.nsul_row (LIKE raw.onspd_row INCLUDING ALL);
 CREATE TABLE IF NOT EXISTS raw.osni_gazetteer_row (LIKE raw.onspd_row INCLUDING ALL);
 CREATE TABLE IF NOT EXISTS raw.dfi_highway_row (LIKE raw.onspd_row INCLUDING ALL);
@@ -196,7 +196,7 @@ CREATE INDEX IF NOT EXISTS idx_raw_os_open_usrn_run_id ON raw.os_open_usrn_row (
 CREATE INDEX IF NOT EXISTS idx_raw_os_open_names_run_id ON raw.os_open_names_row (ingest_run_id);
 CREATE INDEX IF NOT EXISTS idx_raw_os_open_roads_run_id ON raw.os_open_roads_row (ingest_run_id);
 CREATE INDEX IF NOT EXISTS idx_raw_os_open_uprn_run_id ON raw.os_open_uprn_row (ingest_run_id);
-CREATE INDEX IF NOT EXISTS idx_raw_oli_run_id ON raw.os_open_linked_identifiers_row (ingest_run_id);
+CREATE INDEX IF NOT EXISTS idx_raw_os_open_lids_run_id ON raw.os_open_lids_row (ingest_run_id);
 CREATE INDEX IF NOT EXISTS idx_raw_nsul_run_id ON raw.nsul_row (ingest_run_id);
 CREATE INDEX IF NOT EXISTS idx_raw_osni_run_id ON raw.osni_gazetteer_row (ingest_run_id);
 CREATE INDEX IF NOT EXISTS idx_raw_dfi_run_id ON raw.dfi_highway_row (ingest_run_id);
@@ -401,7 +401,7 @@ CREATE TABLE IF NOT EXISTS derived.postcode_street_candidates (
         'os_open_names',
         'os_open_roads',
         'os_open_uprn',
-        'os_open_linked_identifiers',
+        'os_open_lids',
         'nsul',
         'osni_gazetteer',
         'dfi_highway',

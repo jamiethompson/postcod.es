@@ -1,14 +1,14 @@
 {
-  "source_name": "os_open_linked_identifiers",
+  "source_name": "os_open_lids",
   "source_version": "v3_smoke_2026_02_20",
   "retrieved_at_utc": "2026-02-20T22:19:05Z",
-  "source_url": "local://v3_smoke/os_open_linked_identifiers",
+  "source_url": "local://v3_smoke/os_open_lids",
   "processing_git_sha": "ce2b72877a34457e9e02ffcafcd26d02bac92f03",
   "notes": "Synthetic smoke dataset for V3 ingest/build validation",
   "files": [
     {
       "file_role": "primary",
-      "file_path": "/Users/jamie/code/postcod.es/data/source_files/v3_smoke/os_open_linked_identifiers.csv",
+      "file_path": "/Users/jamie/code/postcod.es/data/source_files/v3_smoke/os_open_lids.csv",
       "sha256": "bc31799d901c014741b671578b26344cc4b7008e5264926eac0a667de1eaa78f",
       "size_bytes": 84,
       "format": "csv",

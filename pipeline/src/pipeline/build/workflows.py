@@ -75,7 +75,7 @@ RAW_TABLE_BY_SOURCE = {
     "os_open_names": "raw.os_open_names_row",
     "os_open_roads": "raw.os_open_roads_row",
     "os_open_uprn": "raw.os_open_uprn_row",
-    "os_open_linked_identifiers": "raw.os_open_linked_identifiers_row",
+    "os_open_lids": "raw.os_open_lids_row",
     "nsul": "raw.nsul_row",
     "osni_gazetteer": "raw.osni_gazetteer_row",
     "dfi_highway": "raw.dfi_highway_row",
@@ -458,9 +458,23 @@ def _mark_build_built(conn: psycopg.Connection, bundle_id: str, build_run_id: st
         )
 
 
-def _load_raw_rows(conn: psycopg.Connection, raw_table: str, ingest_run_id: str) -> list[dict[str, Any]]:
+RAW_FETCH_BATCH_SIZE = 5000
+STAGE_INSERT_BATCH_SIZE = 5000
+
+
+def _iter_validated_raw_rows(
+    conn: psycopg.Connection,
+    *,
+    source_name: str,
+    raw_table: str,
+    ingest_run_id: str,
+    field_map: dict[str, str],
+    required_fields: tuple[str, ...],
+):
     schema_name, table_name = raw_table.split(".", 1)
-    with conn.cursor() as cur:
+    cursor_name = f"stage_raw_{table_name}_{uuid.uuid4().hex[:8]}"
+    with conn.cursor(name=cursor_name) as cur:
+        cur.itersize = RAW_FETCH_BATCH_SIZE
         cur.execute(
             sql.SQL(
                 """
@@ -472,7 +486,25 @@ def _load_raw_rows(conn: psycopg.Connection, raw_table: str, ingest_run_id: str)
             ).format(sql.Identifier(schema_name), sql.Identifier(table_name)),
             (ingest_run_id,),
         )
-        return [row[0] for row in cur.fetchall()]
+        first = cur.fetchone()
+        if first is None:
+            raise BuildError(f"Raw source is empty for {source_name}; cannot stage-normalise")
+
+        first_row = first[0]
+        _assert_required_mapped_fields_present(
+            source_name=source_name,
+            sample_row=first_row,
+            field_map=field_map,
+            required_fields=required_fields,
+        )
+        yield first_row
+
+        while True:
+            chunk = cur.fetchmany(RAW_FETCH_BATCH_SIZE)
+            if not chunk:
+                break
+            for row in chunk:
+                yield row[0]
 
 
 def _mapped_fields_for_source(schema_config: dict[str, Any], source_name: str) -> tuple[dict[str, str], tuple[str, ...]]:
@@ -512,24 +544,60 @@ def _mapped_fields_for_source(schema_config: dict[str, Any], source_name: str) -
 
 def _assert_required_mapped_fields_present(
     source_name: str,
-    rows: list[dict[str, Any]],
+    sample_row: dict[str, Any],
     field_map: dict[str, str],
     required_fields: tuple[str, ...],
 ) -> None:
-    if not rows:
-        raise BuildError(f"Raw source is empty for {source_name}; cannot stage-normalise")
-
-    sample_keys = set(rows[0].keys())
+    sample_keys = set(sample_row.keys())
     missing = []
     for key in required_fields:
-        mapped = field_map[key]
-        if mapped not in sample_keys:
-            missing.append(mapped)
+        candidates = _field_name_candidates(field_map, key)
+        if not any(candidate in sample_keys for candidate in candidates):
+            missing.append("/".join(candidates))
     if missing:
         raise BuildError(
             f"Schema mapping unresolved for {source_name}; missing mapped fields in raw rows: "
             + ", ".join(sorted(missing))
         )
+
+
+def _field_name_candidates(field_map: dict[str, str], logical_key: str) -> tuple[str, ...]:
+    names: list[str] = []
+    mapped = field_map.get(logical_key)
+    if mapped:
+        names.append(mapped)
+    names.append(logical_key)
+    legacy_aliases = {
+        "id_1": ("identifier_1", "left_id"),
+        "id_2": ("identifier_2", "right_id"),
+        "identifier_1": ("id_1", "left_id"),
+        "identifier_2": ("id_2", "right_id"),
+        "left_id": ("id_1", "identifier_1"),
+        "right_id": ("id_2", "identifier_2"),
+    }
+    aliases = legacy_aliases.get(logical_key, ())
+    names.extend(aliases)
+
+    expanded: list[str] = []
+    for name in names:
+        expanded.append(name)
+        expanded.append(name.lower())
+        expanded.append(name.upper())
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for name in expanded:
+        if name not in seen:
+            deduped.append(name)
+            seen.add(name)
+    return tuple(deduped)
+
+
+def _field_value(row: dict[str, Any], field_map: dict[str, str], logical_key: str) -> Any:
+    for candidate in _field_name_candidates(field_map, logical_key):
+        if candidate in row:
+            return row.get(candidate)
+    return None
 
 
 def _schema_insert_rows(
@@ -544,6 +612,18 @@ def _schema_insert_rows(
     return len(rows)
 
 
+def _flush_stage_batch(
+    conn: psycopg.Connection,
+    query: sql.SQL,
+    payload: list[tuple[Any, ...]],
+) -> int:
+    if not payload:
+        return 0
+    inserted = _schema_insert_rows(conn, query, payload)
+    payload.clear()
+    return inserted
+
+
 def _stage_cleanup(conn: psycopg.Connection, build_run_id: str) -> None:
     tables = (
         "stage.ppd_parsed_address",
@@ -552,6 +632,7 @@ def _stage_cleanup(conn: psycopg.Connection, build_run_id: str) -> None:
         "stage.nsul_uprn_postcode",
         "stage.oli_uprn_usrn",
         "stage.oli_toid_usrn",
+        "stage.oli_identifier_pair",
         "stage.uprn_point",
         "stage.open_roads_segment",
         "stage.open_names_road_feature",
@@ -575,24 +656,35 @@ def _pass_0a_raw_ingest(
     build_run_id: str,
     source_runs: dict[str, tuple[str, ...]],
 ) -> dict[str, int]:
+    del build_run_id  # Pass 0a validates bundle/run metadata only.
     counts: dict[str, int] = {}
     with conn.cursor() as cur:
         for source_name, run_ids in sorted(source_runs.items()):
-            raw_table = RAW_TABLE_BY_SOURCE[source_name]
-            schema_name, table_name = raw_table.split(".", 1)
             total_row_count = 0
             for ingest_run_id in run_ids:
                 cur.execute(
-                    sql.SQL("SELECT COUNT(*) FROM {}.{} WHERE ingest_run_id = %s").format(
-                        sql.Identifier(schema_name),
-                        sql.Identifier(table_name),
-                    ),
+                    """
+                    SELECT source_name, record_count
+                    FROM meta.ingest_run
+                    WHERE run_id = %s
+                    """,
                     (ingest_run_id,),
                 )
-                row_count = int(cur.fetchone()[0])
+                row = cur.fetchone()
+                if row is None:
+                    raise BuildError(
+                        f"Pass 0a failed: ingest run missing in metadata source={source_name} run={ingest_run_id}"
+                    )
+                row_source_name, record_count = row
+                if row_source_name != source_name:
+                    raise BuildError(
+                        "Pass 0a failed: ingest run/source mismatch "
+                        f"bundle_source={source_name} run_source={row_source_name} run={ingest_run_id}"
+                    )
+                row_count = int(record_count or 0)
                 if row_count <= 0:
                     raise BuildError(
-                        "Pass 0a failed: source has no raw rows for "
+                        "Pass 0a failed: source has no recorded rows for "
                         f"source={source_name} run={ingest_run_id}"
                     )
                 total_row_count += row_count
@@ -608,6 +700,31 @@ def _country_enrichment_available(country_iso2: str, subdivision_code: str | Non
     return False
 
 
+def _onspd_country_mapping(value: str | None) -> tuple[str, str, str | None]:
+    code = (value or "").strip().upper()
+    mapping = {
+        "E92000001": ("GB", "GBR", "GB-ENG"),
+        "S92000003": ("GB", "GBR", "GB-SCT"),
+        "W92000004": ("GB", "GBR", "GB-WLS"),
+        "N92000002": ("GB", "GBR", "GB-NIR"),
+    }
+    if code in mapping:
+        return mapping[code]
+    if code in {"GB", "GBR"}:
+        return "GB", "GBR", None
+    return "GB", "GBR", None
+
+
+def _normalise_onspd_status(value: str | None) -> str:
+    raw = (value or "").strip()
+    if raw == "":
+        return "active"
+    lowered = raw.lower()
+    if lowered in {"active", "terminated"}:
+        return lowered
+    return "terminated"
+
+
 def _populate_stage_onspd(
     conn: psycopg.Connection,
     build_run_id: str,
@@ -615,32 +732,59 @@ def _populate_stage_onspd(
     field_map: dict[str, str],
     required_fields: tuple[str, ...],
 ) -> int:
-    rows = _load_raw_rows(conn, "raw.onspd_row", ingest_run_id)
-    _assert_required_mapped_fields_present("onspd", rows, field_map, required_fields)
+    insert_sql = sql.SQL(
+        """
+        INSERT INTO stage.onspd_postcode (
+            build_run_id,
+            postcode_norm,
+            postcode_display,
+            status,
+            lat,
+            lon,
+            easting,
+            northing,
+            country_iso2,
+            country_iso3,
+            subdivision_code,
+            post_town,
+            locality,
+            street_enrichment_available,
+            onspd_run_id
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """
+    )
 
     payload: list[tuple[Any, ...]] = []
-    for row in rows:
-        postcode_raw = row.get(field_map["postcode"])
+    inserted = 0
+    for row in _iter_validated_raw_rows(
+        conn,
+        source_name="onspd",
+        raw_table="raw.onspd_row",
+        ingest_run_id=ingest_run_id,
+        field_map=field_map,
+        required_fields=required_fields,
+    ):
+        postcode_raw = _field_value(row, field_map, "postcode")
         postcode_n = postcode_norm(str(postcode_raw) if postcode_raw is not None else None)
         postcode_d = postcode_display(str(postcode_raw) if postcode_raw is not None else None)
         if postcode_n is None or postcode_d is None:
             continue
 
-        status_raw = row.get(field_map["status"])
-        status = (str(status_raw).strip().lower() if status_raw is not None else "active") or "active"
-
-        country_iso2 = str(row.get(field_map["country_iso2"], "")).strip().upper()
-        country_iso3 = str(row.get(field_map["country_iso3"], "")).strip().upper()
-        subdivision_code_raw = row.get(field_map["subdivision_code"])
-        subdivision_code = (
-            str(subdivision_code_raw).strip().upper() if subdivision_code_raw is not None else None
+        status_key = field_map.get("status")
+        status = _normalise_onspd_status(
+            str(row.get(status_key)) if status_key and row.get(status_key) is not None else None
         )
-        subdivision_code = subdivision_code or None
 
-        lat_raw = row.get(field_map["lat"])
-        lon_raw = row.get(field_map["lon"])
-        easting_raw = row.get(field_map["easting"])
-        northing_raw = row.get(field_map["northing"])
+        country_key = field_map.get("subdivision_code") or field_map.get("country_iso2")
+        mapped_country_value = (
+            str(row.get(country_key)) if country_key and row.get(country_key) is not None else None
+        )
+        country_iso2, country_iso3, subdivision_code = _onspd_country_mapping(mapped_country_value)
+
+        lat_raw = _field_value(row, field_map, "lat")
+        lon_raw = _field_value(row, field_map, "lon")
+        easting_raw = _field_value(row, field_map, "easting")
+        northing_raw = _field_value(row, field_map, "northing")
 
         lat: Decimal | None
         lon: Decimal | None
@@ -658,8 +802,10 @@ def _populate_stage_onspd(
             easting = None
             northing = None
 
-        post_town_raw = row.get(field_map["post_town"])
-        locality_raw = row.get(field_map["locality"])
+        post_town_key = field_map.get("post_town")
+        locality_key = field_map.get("locality")
+        post_town_raw = row.get(post_town_key) if post_town_key else None
+        locality_raw = row.get(locality_key) if locality_key else None
 
         payload.append(
             (
@@ -680,32 +826,11 @@ def _populate_stage_onspd(
                 ingest_run_id,
             )
         )
+        if len(payload) >= STAGE_INSERT_BATCH_SIZE:
+            inserted += _flush_stage_batch(conn, insert_sql, payload)
 
-    return _schema_insert_rows(
-        conn,
-        sql.SQL(
-            """
-            INSERT INTO stage.onspd_postcode (
-                build_run_id,
-                postcode_norm,
-                postcode_display,
-                status,
-                lat,
-                lon,
-                easting,
-                northing,
-                country_iso2,
-                country_iso3,
-                subdivision_code,
-                post_town,
-                locality,
-                street_enrichment_available,
-                onspd_run_id
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """
-        ),
-        payload,
-    )
+    inserted += _flush_stage_batch(conn, insert_sql, payload)
+    return inserted
 
 
 def _populate_stage_usrn(
@@ -715,13 +840,42 @@ def _populate_stage_usrn(
     field_map: dict[str, str],
     required_fields: tuple[str, ...],
 ) -> int:
-    rows = _load_raw_rows(conn, "raw.os_open_usrn_row", ingest_run_id)
-    _assert_required_mapped_fields_present("os_open_usrn", rows, field_map, required_fields)
+    insert_sql = sql.SQL(
+        """
+        INSERT INTO stage.streets_usrn_input (
+            build_run_id,
+            usrn,
+            street_name,
+            street_name_casefolded,
+            street_class,
+            street_status,
+            usrn_run_id
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (build_run_id, usrn)
+        DO UPDATE SET
+            street_name = EXCLUDED.street_name,
+            street_name_casefolded = EXCLUDED.street_name_casefolded,
+            street_class = EXCLUDED.street_class,
+            street_status = EXCLUDED.street_status,
+            usrn_run_id = EXCLUDED.usrn_run_id
+        """
+    )
 
     payload: list[tuple[Any, ...]] = []
-    for row in rows:
-        usrn_raw = row.get(field_map["usrn"])
-        name_raw = row.get(field_map["street_name"])
+    inserted = 0
+    street_name_key = field_map.get("street_name")
+    street_class_key = field_map.get("street_class")
+    street_status_key = field_map.get("street_status")
+    for row in _iter_validated_raw_rows(
+        conn,
+        source_name="os_open_usrn",
+        raw_table="raw.os_open_usrn_row",
+        ingest_run_id=ingest_run_id,
+        field_map=field_map,
+        required_fields=required_fields,
+    ):
+        usrn_raw = _field_value(row, field_map, "usrn")
+        name_raw = row.get(street_name_key) if street_name_key else None
         if usrn_raw in (None, "") or name_raw in (None, ""):
             continue
         try:
@@ -739,36 +893,16 @@ def _populate_stage_usrn(
                 usrn,
                 street_name,
                 folded,
-                str(row.get(field_map.get("street_class", ""), "")).strip() or None,
-                str(row.get(field_map.get("street_status", ""), "")).strip() or None,
+                str(row.get(street_class_key)).strip() if street_class_key and row.get(street_class_key) not in (None, "") else None,
+                str(row.get(street_status_key)).strip() if street_status_key and row.get(street_status_key) not in (None, "") else None,
                 ingest_run_id,
             )
         )
+        if len(payload) >= STAGE_INSERT_BATCH_SIZE:
+            inserted += _flush_stage_batch(conn, insert_sql, payload)
 
-    return _schema_insert_rows(
-        conn,
-        sql.SQL(
-            """
-            INSERT INTO stage.streets_usrn_input (
-                build_run_id,
-                usrn,
-                street_name,
-                street_name_casefolded,
-                street_class,
-                street_status,
-                usrn_run_id
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (build_run_id, usrn)
-            DO UPDATE SET
-                street_name = EXCLUDED.street_name,
-                street_name_casefolded = EXCLUDED.street_name_casefolded,
-                street_class = EXCLUDED.street_class,
-                street_status = EXCLUDED.street_status,
-                usrn_run_id = EXCLUDED.usrn_run_id
-            """
-        ),
-        payload,
-    )
+    inserted += _flush_stage_batch(conn, insert_sql, payload)
+    return inserted
 
 
 def _populate_stage_open_names(
@@ -778,16 +912,49 @@ def _populate_stage_open_names(
     field_map: dict[str, str],
     required_fields: tuple[str, ...],
 ) -> int:
-    rows = _load_raw_rows(conn, "raw.os_open_names_row", ingest_run_id)
-    _assert_required_mapped_fields_present("os_open_names", rows, field_map, required_fields)
+    insert_sql = sql.SQL(
+        """
+        INSERT INTO stage.open_names_road_feature (
+            build_run_id,
+            feature_id,
+            toid,
+            postcode_norm,
+            street_name_raw,
+            street_name_casefolded,
+            ingest_run_id
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (build_run_id, feature_id)
+        DO UPDATE SET
+            toid = EXCLUDED.toid,
+            postcode_norm = EXCLUDED.postcode_norm,
+            street_name_raw = EXCLUDED.street_name_raw,
+            street_name_casefolded = EXCLUDED.street_name_casefolded,
+            ingest_run_id = EXCLUDED.ingest_run_id
+        """
+    )
 
     payload: list[tuple[Any, ...]] = []
-    for row in rows:
-        feature_id_raw = row.get(field_map["feature_id"])
-        street_raw = row.get(field_map["street_name"])
-        postcode_raw = row.get(field_map["postcode"])
-        toid_raw = row.get(field_map.get("toid", ""))
+    inserted = 0
+    toid_key = field_map.get("toid")
+    postcode_key = field_map.get("postcode")
+    local_type_key = field_map.get("local_type")
+    for row in _iter_validated_raw_rows(
+        conn,
+        source_name="os_open_names",
+        raw_table="raw.os_open_names_row",
+        ingest_run_id=ingest_run_id,
+        field_map=field_map,
+        required_fields=required_fields,
+    ):
+        feature_id_raw = _field_value(row, field_map, "feature_id")
+        street_raw = _field_value(row, field_map, "street_name")
+        postcode_raw = row.get(postcode_key) if postcode_key else None
+        toid_raw = row.get(toid_key) if toid_key else None
         if feature_id_raw in (None, "") or street_raw in (None, ""):
+            continue
+
+        local_type = str(row.get(local_type_key)).strip().lower() if local_type_key and row.get(local_type_key) not in (None, "") else ""
+        if local_type and "road" not in local_type and "transport" not in local_type:
             continue
 
         folded = street_casefold(str(street_raw))
@@ -806,31 +973,11 @@ def _populate_stage_open_names(
                 ingest_run_id,
             )
         )
+        if len(payload) >= STAGE_INSERT_BATCH_SIZE:
+            inserted += _flush_stage_batch(conn, insert_sql, payload)
 
-    return _schema_insert_rows(
-        conn,
-        sql.SQL(
-            """
-            INSERT INTO stage.open_names_road_feature (
-                build_run_id,
-                feature_id,
-                toid,
-                postcode_norm,
-                street_name_raw,
-                street_name_casefolded,
-                ingest_run_id
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (build_run_id, feature_id)
-            DO UPDATE SET
-                toid = EXCLUDED.toid,
-                postcode_norm = EXCLUDED.postcode_norm,
-                street_name_raw = EXCLUDED.street_name_raw,
-                street_name_casefolded = EXCLUDED.street_name_casefolded,
-                ingest_run_id = EXCLUDED.ingest_run_id
-            """
-        ),
-        payload,
-    )
+    inserted += _flush_stage_batch(conn, insert_sql, payload)
+    return inserted
 
 
 def _populate_stage_open_roads(
@@ -840,13 +987,44 @@ def _populate_stage_open_roads(
     field_map: dict[str, str],
     required_fields: tuple[str, ...],
 ) -> int:
-    rows = _load_raw_rows(conn, "raw.os_open_roads_row", ingest_run_id)
-    _assert_required_mapped_fields_present("os_open_roads", rows, field_map, required_fields)
+    insert_sql = sql.SQL(
+        """
+        INSERT INTO stage.open_roads_segment (
+            build_run_id,
+            segment_id,
+            road_id,
+            postcode_norm,
+            usrn,
+            road_name,
+            road_name_casefolded,
+            ingest_run_id
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (build_run_id, segment_id)
+        DO UPDATE SET
+            road_id = EXCLUDED.road_id,
+            postcode_norm = EXCLUDED.postcode_norm,
+            usrn = EXCLUDED.usrn,
+            road_name = EXCLUDED.road_name,
+            road_name_casefolded = EXCLUDED.road_name_casefolded,
+            ingest_run_id = EXCLUDED.ingest_run_id
+        """
+    )
 
     payload: list[tuple[Any, ...]] = []
-    for row in rows:
-        segment_id_raw = row.get(field_map["segment_id"])
-        road_name_raw = row.get(field_map["road_name"])
+    inserted = 0
+    postcode_key = field_map.get("postcode")
+    usrn_key = field_map.get("usrn")
+    road_id_key = field_map.get("road_id")
+    for row in _iter_validated_raw_rows(
+        conn,
+        source_name="os_open_roads",
+        raw_table="raw.os_open_roads_row",
+        ingest_run_id=ingest_run_id,
+        field_map=field_map,
+        required_fields=required_fields,
+    ):
+        segment_id_raw = _field_value(row, field_map, "segment_id")
+        road_name_raw = _field_value(row, field_map, "road_name")
         if segment_id_raw in (None, "") or road_name_raw in (None, ""):
             continue
 
@@ -854,19 +1032,21 @@ def _populate_stage_open_roads(
         if folded is None:
             continue
 
-        postcode_n = postcode_norm(str(row.get(field_map.get("postcode", ""), "")) or None)
+        postcode_n = postcode_norm(str(row.get(postcode_key)) if postcode_key and row.get(postcode_key) not in (None, "") else None)
 
-        usrn_raw = row.get(field_map.get("usrn", ""))
+        usrn_raw = row.get(usrn_key) if usrn_key else None
         try:
             usrn = int(usrn_raw) if usrn_raw not in (None, "") else None
         except Exception:
             usrn = None
 
+        road_id_raw = row.get(road_id_key) if road_id_key else None
+
         payload.append(
             (
                 build_run_id,
                 str(segment_id_raw).strip(),
-                str(row.get(field_map.get("road_id", ""), "")).strip() or None,
+                str(road_id_raw).strip() if road_id_raw not in (None, "") else None,
                 postcode_n,
                 usrn,
                 str(road_name_raw).strip(),
@@ -874,33 +1054,11 @@ def _populate_stage_open_roads(
                 ingest_run_id,
             )
         )
+        if len(payload) >= STAGE_INSERT_BATCH_SIZE:
+            inserted += _flush_stage_batch(conn, insert_sql, payload)
 
-    return _schema_insert_rows(
-        conn,
-        sql.SQL(
-            """
-            INSERT INTO stage.open_roads_segment (
-                build_run_id,
-                segment_id,
-                road_id,
-                postcode_norm,
-                usrn,
-                road_name,
-                road_name_casefolded,
-                ingest_run_id
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (build_run_id, segment_id)
-            DO UPDATE SET
-                road_id = EXCLUDED.road_id,
-                postcode_norm = EXCLUDED.postcode_norm,
-                usrn = EXCLUDED.usrn,
-                road_name = EXCLUDED.road_name,
-                road_name_casefolded = EXCLUDED.road_name_casefolded,
-                ingest_run_id = EXCLUDED.ingest_run_id
-            """
-        ),
-        payload,
-    )
+    inserted += _flush_stage_batch(conn, insert_sql, payload)
+    return inserted
 
 
 def _populate_stage_open_uprn(
@@ -910,12 +1068,33 @@ def _populate_stage_open_uprn(
     field_map: dict[str, str],
     required_fields: tuple[str, ...],
 ) -> int:
-    rows = _load_raw_rows(conn, "raw.os_open_uprn_row", ingest_run_id)
-    _assert_required_mapped_fields_present("os_open_uprn", rows, field_map, required_fields)
+    insert_sql = sql.SQL(
+        """
+        INSERT INTO stage.uprn_point (
+            build_run_id,
+            uprn,
+            postcode_norm,
+            ingest_run_id
+        ) VALUES (%s, %s, %s, %s)
+        ON CONFLICT (build_run_id, uprn)
+        DO UPDATE SET
+            postcode_norm = EXCLUDED.postcode_norm,
+            ingest_run_id = EXCLUDED.ingest_run_id
+        """
+    )
 
     payload: list[tuple[Any, ...]] = []
-    for row in rows:
-        uprn_raw = row.get(field_map["uprn"])
+    inserted = 0
+    postcode_key = field_map.get("postcode")
+    for row in _iter_validated_raw_rows(
+        conn,
+        source_name="os_open_uprn",
+        raw_table="raw.os_open_uprn_row",
+        ingest_run_id=ingest_run_id,
+        field_map=field_map,
+        required_fields=required_fields,
+    ):
+        uprn_raw = _field_value(row, field_map, "uprn")
         if uprn_raw in (None, ""):
             continue
         try:
@@ -923,28 +1102,46 @@ def _populate_stage_open_uprn(
         except Exception:
             continue
 
-        postcode_n = postcode_norm(str(row.get(field_map.get("postcode", ""), "")) or None)
+        postcode_n = postcode_norm(str(row.get(postcode_key)) if postcode_key and row.get(postcode_key) not in (None, "") else None)
 
         payload.append((build_run_id, uprn, postcode_n, ingest_run_id))
+        if len(payload) >= STAGE_INSERT_BATCH_SIZE:
+            inserted += _flush_stage_batch(conn, insert_sql, payload)
 
-    return _schema_insert_rows(
-        conn,
-        sql.SQL(
-            """
-            INSERT INTO stage.uprn_point (
-                build_run_id,
-                uprn,
-                postcode_norm,
-                ingest_run_id
-            ) VALUES (%s, %s, %s, %s)
-            ON CONFLICT (build_run_id, uprn)
-            DO UPDATE SET
-                postcode_norm = EXCLUDED.postcode_norm,
-                ingest_run_id = EXCLUDED.ingest_run_id
-            """
-        ),
-        payload,
-    )
+    inserted += _flush_stage_batch(conn, insert_sql, payload)
+    return inserted
+
+
+def _infer_lids_relation(
+    relation_raw: Any,
+    left_id: str,
+    right_id: str,
+) -> tuple[str | None, str, str]:
+    relation = str(relation_raw).strip().lower() if relation_raw not in (None, "") else ""
+    left_is_toid = left_id.lower().startswith("osgb")
+    right_is_toid = right_id.lower().startswith("osgb")
+    left_is_digits = left_id.isdigit()
+    right_is_digits = right_id.isdigit()
+
+    if relation in {"toid_usrn", "toid->usrn", "toid_usrn_link"}:
+        return "toid_usrn", left_id, right_id
+    if relation in {"uprn_usrn", "uprn->usrn", "uprn_usrn_link"}:
+        return "uprn_usrn", left_id, right_id
+
+    if left_is_toid and right_is_digits:
+        return "toid_usrn", left_id, right_id
+    if right_is_toid and left_is_digits:
+        return "toid_usrn", right_id, left_id
+
+    if left_is_digits and right_is_digits:
+        # UPRN values are usually longer than USRN values. If ambiguous, keep input order.
+        if len(left_id) > 8 and len(right_id) <= 8:
+            return "uprn_usrn", left_id, right_id
+        if len(right_id) > 8 and len(left_id) <= 8:
+            return "uprn_usrn", right_id, left_id
+        return "uprn_usrn", left_id, right_id
+
+    return None, left_id, right_id
 
 
 def _populate_stage_oli(
@@ -953,76 +1150,99 @@ def _populate_stage_oli(
     ingest_run_id: str,
     field_map: dict[str, str],
     required_fields: tuple[str, ...],
-) -> tuple[int, int]:
-    rows = _load_raw_rows(conn, "raw.os_open_linked_identifiers_row", ingest_run_id)
-    _assert_required_mapped_fields_present(
-        "os_open_linked_identifiers", rows, field_map, required_fields
+) -> tuple[int, int, int]:
+    toid_insert_sql = sql.SQL(
+        """
+        INSERT INTO stage.oli_toid_usrn (
+            build_run_id,
+            toid,
+            usrn,
+            ingest_run_id
+        ) VALUES (%s, %s, %s, %s)
+        ON CONFLICT (build_run_id, toid, usrn)
+        DO NOTHING
+        """
+    )
+    uprn_insert_sql = sql.SQL(
+        """
+        INSERT INTO stage.oli_uprn_usrn (
+            build_run_id,
+            uprn,
+            usrn,
+            ingest_run_id
+        ) VALUES (%s, %s, %s, %s)
+        ON CONFLICT (build_run_id, uprn, usrn)
+        DO NOTHING
+        """
+    )
+    relation_insert_sql = sql.SQL(
+        """
+        INSERT INTO stage.oli_identifier_pair (
+            build_run_id,
+            id_1,
+            id_2,
+            relation_type,
+            ingest_run_id
+        ) VALUES (%s, %s, %s, %s, %s)
+        ON CONFLICT (build_run_id, id_1, id_2, relation_type)
+        DO NOTHING
+        """
     )
 
     toid_payload: list[tuple[Any, ...]] = []
     uprn_payload: list[tuple[Any, ...]] = []
-
-    for row in rows:
-        relation_raw = row.get(field_map["relation_type"])
-        left_raw = row.get(field_map["left_id"])
-        right_raw = row.get(field_map["right_id"])
-
-        relation = str(relation_raw).strip().lower() if relation_raw not in (None, "") else ""
+    relation_payload: list[tuple[Any, ...]] = []
+    relation_key = field_map.get("relation_type")
+    toid_count = 0
+    uprn_count = 0
+    relation_count = 0
+    for row in _iter_validated_raw_rows(
+        conn,
+        source_name="os_open_lids",
+        raw_table="raw.os_open_lids_row",
+        ingest_run_id=ingest_run_id,
+        field_map=field_map,
+        required_fields=required_fields,
+    ):
+        relation_raw = row.get(relation_key) if relation_key else None
+        left_raw = _field_value(row, field_map, "id_1")
+        right_raw = _field_value(row, field_map, "id_2")
         if left_raw in (None, "") or right_raw in (None, ""):
             continue
 
         left_id = str(left_raw).strip()
         right_id = str(right_raw).strip()
+        relation, rel_left_id, rel_right_id = _infer_lids_relation(relation_raw, left_id, right_id)
+        if relation is None:
+            continue
 
-        if relation in {"toid_usrn", "toid->usrn", "toid_usrn_link"}:
+        relation_payload.append((build_run_id, rel_left_id, rel_right_id, relation, ingest_run_id))
+
+        if relation == "toid_usrn":
             try:
-                usrn = int(right_id)
+                usrn = int(rel_right_id)
             except Exception:
                 continue
-            toid_payload.append((build_run_id, left_id, usrn, ingest_run_id))
-        elif relation in {"uprn_usrn", "uprn->usrn", "uprn_usrn_link"}:
+            toid_payload.append((build_run_id, rel_left_id, usrn, ingest_run_id))
+        elif relation == "uprn_usrn":
             try:
-                uprn = int(left_id)
-                usrn = int(right_id)
+                uprn = int(rel_left_id)
+                usrn = int(rel_right_id)
             except Exception:
                 continue
             uprn_payload.append((build_run_id, uprn, usrn, ingest_run_id))
 
-    toid_count = _schema_insert_rows(
-        conn,
-        sql.SQL(
-            """
-            INSERT INTO stage.oli_toid_usrn (
-                build_run_id,
-                toid,
-                usrn,
-                ingest_run_id
-            ) VALUES (%s, %s, %s, %s)
-            ON CONFLICT (build_run_id, toid, usrn)
-            DO NOTHING
-            """
-        ),
-        toid_payload,
-    )
+        if len(toid_payload) >= STAGE_INSERT_BATCH_SIZE:
+            toid_count += _flush_stage_batch(conn, toid_insert_sql, toid_payload)
+        if len(uprn_payload) >= STAGE_INSERT_BATCH_SIZE:
+            uprn_count += _flush_stage_batch(conn, uprn_insert_sql, uprn_payload)
+        if len(relation_payload) >= STAGE_INSERT_BATCH_SIZE:
+            relation_count += _flush_stage_batch(conn, relation_insert_sql, relation_payload)
 
-    uprn_count = _schema_insert_rows(
-        conn,
-        sql.SQL(
-            """
-            INSERT INTO stage.oli_uprn_usrn (
-                build_run_id,
-                uprn,
-                usrn,
-                ingest_run_id
-            ) VALUES (%s, %s, %s, %s)
-            ON CONFLICT (build_run_id, uprn, usrn)
-            DO NOTHING
-            """
-        ),
-        uprn_payload,
-    )
-
-    return toid_count, uprn_count
+    toid_count += _flush_stage_batch(conn, toid_insert_sql, toid_payload)
+    uprn_count += _flush_stage_batch(conn, uprn_insert_sql, uprn_payload)
+    relation_count += _flush_stage_batch(conn, relation_insert_sql, relation_payload)
+    return toid_count, uprn_count, relation_count
 
 
 def _populate_stage_nsul(
@@ -1032,13 +1252,31 @@ def _populate_stage_nsul(
     field_map: dict[str, str],
     required_fields: tuple[str, ...],
 ) -> int:
-    rows = _load_raw_rows(conn, "raw.nsul_row", ingest_run_id)
-    _assert_required_mapped_fields_present("nsul", rows, field_map, required_fields)
+    insert_sql = sql.SQL(
+        """
+        INSERT INTO stage.nsul_uprn_postcode (
+            build_run_id,
+            uprn,
+            postcode_norm,
+            ingest_run_id
+        ) VALUES (%s, %s, %s, %s)
+        ON CONFLICT (build_run_id, uprn, postcode_norm)
+        DO NOTHING
+        """
+    )
 
     payload: list[tuple[Any, ...]] = []
-    for row in rows:
-        uprn_raw = row.get(field_map["uprn"])
-        postcode_raw = row.get(field_map["postcode"])
+    inserted = 0
+    for row in _iter_validated_raw_rows(
+        conn,
+        source_name="nsul",
+        raw_table="raw.nsul_row",
+        ingest_run_id=ingest_run_id,
+        field_map=field_map,
+        required_fields=required_fields,
+    ):
+        uprn_raw = _field_value(row, field_map, "uprn")
+        postcode_raw = _field_value(row, field_map, "postcode")
         if uprn_raw in (None, ""):
             continue
         try:
@@ -1049,23 +1287,11 @@ def _populate_stage_nsul(
         if postcode_n is None:
             continue
         payload.append((build_run_id, uprn, postcode_n, ingest_run_id))
+        if len(payload) >= STAGE_INSERT_BATCH_SIZE:
+            inserted += _flush_stage_batch(conn, insert_sql, payload)
 
-    return _schema_insert_rows(
-        conn,
-        sql.SQL(
-            """
-            INSERT INTO stage.nsul_uprn_postcode (
-                build_run_id,
-                uprn,
-                postcode_norm,
-                ingest_run_id
-            ) VALUES (%s, %s, %s, %s)
-            ON CONFLICT (build_run_id, uprn, postcode_norm)
-            DO NOTHING
-            """
-        ),
-        payload,
-    )
+    inserted += _flush_stage_batch(conn, insert_sql, payload)
+    return inserted
 
 
 def _populate_stage_osni(
@@ -1075,13 +1301,38 @@ def _populate_stage_osni(
     field_map: dict[str, str],
     required_fields: tuple[str, ...],
 ) -> int:
-    rows = _load_raw_rows(conn, "raw.osni_gazetteer_row", ingest_run_id)
-    _assert_required_mapped_fields_present("osni_gazetteer", rows, field_map, required_fields)
+    insert_sql = sql.SQL(
+        """
+        INSERT INTO stage.osni_street_point (
+            build_run_id,
+            feature_id,
+            postcode_norm,
+            street_name_raw,
+            street_name_casefolded,
+            ingest_run_id
+        ) VALUES (%s, %s, %s, %s, %s, %s)
+        ON CONFLICT (build_run_id, feature_id)
+        DO UPDATE SET
+            postcode_norm = EXCLUDED.postcode_norm,
+            street_name_raw = EXCLUDED.street_name_raw,
+            street_name_casefolded = EXCLUDED.street_name_casefolded,
+            ingest_run_id = EXCLUDED.ingest_run_id
+        """
+    )
 
     payload: list[tuple[Any, ...]] = []
-    for row in rows:
-        feature_id_raw = row.get(field_map["feature_id"])
-        street_raw = row.get(field_map["street_name"])
+    inserted = 0
+    postcode_key = field_map.get("postcode")
+    for row in _iter_validated_raw_rows(
+        conn,
+        source_name="osni_gazetteer",
+        raw_table="raw.osni_gazetteer_row",
+        ingest_run_id=ingest_run_id,
+        field_map=field_map,
+        required_fields=required_fields,
+    ):
+        feature_id_raw = _field_value(row, field_map, "feature_id")
+        street_raw = _field_value(row, field_map, "street_name")
         if feature_id_raw in (None, "") or street_raw in (None, ""):
             continue
 
@@ -1089,7 +1340,7 @@ def _populate_stage_osni(
         if folded is None:
             continue
 
-        postcode_n = postcode_norm(str(row.get(field_map.get("postcode", ""), "")) or None)
+        postcode_n = postcode_norm(str(row.get(postcode_key)) if postcode_key and row.get(postcode_key) not in (None, "") else None)
         payload.append(
             (
                 build_run_id,
@@ -1100,29 +1351,11 @@ def _populate_stage_osni(
                 ingest_run_id,
             )
         )
+        if len(payload) >= STAGE_INSERT_BATCH_SIZE:
+            inserted += _flush_stage_batch(conn, insert_sql, payload)
 
-    return _schema_insert_rows(
-        conn,
-        sql.SQL(
-            """
-            INSERT INTO stage.osni_street_point (
-                build_run_id,
-                feature_id,
-                postcode_norm,
-                street_name_raw,
-                street_name_casefolded,
-                ingest_run_id
-            ) VALUES (%s, %s, %s, %s, %s, %s)
-            ON CONFLICT (build_run_id, feature_id)
-            DO UPDATE SET
-                postcode_norm = EXCLUDED.postcode_norm,
-                street_name_raw = EXCLUDED.street_name_raw,
-                street_name_casefolded = EXCLUDED.street_name_casefolded,
-                ingest_run_id = EXCLUDED.ingest_run_id
-            """
-        ),
-        payload,
-    )
+    inserted += _flush_stage_batch(conn, insert_sql, payload)
+    return inserted
 
 
 def _populate_stage_dfi(
@@ -1132,20 +1365,45 @@ def _populate_stage_dfi(
     field_map: dict[str, str],
     required_fields: tuple[str, ...],
 ) -> int:
-    rows = _load_raw_rows(conn, "raw.dfi_highway_row", ingest_run_id)
-    _assert_required_mapped_fields_present("dfi_highway", rows, field_map, required_fields)
+    insert_sql = sql.SQL(
+        """
+        INSERT INTO stage.dfi_road_segment (
+            build_run_id,
+            segment_id,
+            postcode_norm,
+            street_name_raw,
+            street_name_casefolded,
+            ingest_run_id
+        ) VALUES (%s, %s, %s, %s, %s, %s)
+        ON CONFLICT (build_run_id, segment_id)
+        DO UPDATE SET
+            postcode_norm = EXCLUDED.postcode_norm,
+            street_name_raw = EXCLUDED.street_name_raw,
+            street_name_casefolded = EXCLUDED.street_name_casefolded,
+            ingest_run_id = EXCLUDED.ingest_run_id
+        """
+    )
 
     payload: list[tuple[Any, ...]] = []
-    for row in rows:
-        segment_id_raw = row.get(field_map["segment_id"])
-        street_raw = row.get(field_map["street_name"])
+    inserted = 0
+    postcode_key = field_map.get("postcode")
+    for row in _iter_validated_raw_rows(
+        conn,
+        source_name="dfi_highway",
+        raw_table="raw.dfi_highway_row",
+        ingest_run_id=ingest_run_id,
+        field_map=field_map,
+        required_fields=required_fields,
+    ):
+        segment_id_raw = _field_value(row, field_map, "segment_id")
+        street_raw = _field_value(row, field_map, "street_name")
         if segment_id_raw in (None, "") or street_raw in (None, ""):
             continue
 
         folded = street_casefold(str(street_raw))
         if folded is None:
             continue
-        postcode_n = postcode_norm(str(row.get(field_map.get("postcode", ""), "")) or None)
+        postcode_n = postcode_norm(str(row.get(postcode_key)) if postcode_key and row.get(postcode_key) not in (None, "") else None)
 
         payload.append(
             (
@@ -1157,29 +1415,11 @@ def _populate_stage_dfi(
                 ingest_run_id,
             )
         )
+        if len(payload) >= STAGE_INSERT_BATCH_SIZE:
+            inserted += _flush_stage_batch(conn, insert_sql, payload)
 
-    return _schema_insert_rows(
-        conn,
-        sql.SQL(
-            """
-            INSERT INTO stage.dfi_road_segment (
-                build_run_id,
-                segment_id,
-                postcode_norm,
-                street_name_raw,
-                street_name_casefolded,
-                ingest_run_id
-            ) VALUES (%s, %s, %s, %s, %s, %s)
-            ON CONFLICT (build_run_id, segment_id)
-            DO UPDATE SET
-                postcode_norm = EXCLUDED.postcode_norm,
-                street_name_raw = EXCLUDED.street_name_raw,
-                street_name_casefolded = EXCLUDED.street_name_casefolded,
-                ingest_run_id = EXCLUDED.ingest_run_id
-            """
-        ),
-        payload,
-    )
+    inserted += _flush_stage_batch(conn, insert_sql, payload)
+    return inserted
 
 
 def _populate_stage_ppd(
@@ -1189,15 +1429,41 @@ def _populate_stage_ppd(
     field_map: dict[str, str],
     required_fields: tuple[str, ...],
 ) -> int:
-    rows = _load_raw_rows(conn, "raw.ppd_row", ingest_run_id)
-    _assert_required_mapped_fields_present("ppd", rows, field_map, required_fields)
+    insert_sql = sql.SQL(
+        """
+        INSERT INTO stage.ppd_parsed_address (
+            build_run_id,
+            row_hash,
+            postcode_norm,
+            house_number,
+            street_token_raw,
+            street_token_casefolded,
+            ingest_run_id
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (build_run_id, row_hash)
+        DO UPDATE SET
+            postcode_norm = EXCLUDED.postcode_norm,
+            house_number = EXCLUDED.house_number,
+            street_token_raw = EXCLUDED.street_token_raw,
+            street_token_casefolded = EXCLUDED.street_token_casefolded,
+            ingest_run_id = EXCLUDED.ingest_run_id
+        """
+    )
 
     payload: list[tuple[Any, ...]] = []
-    for row in rows:
-        row_hash_raw = row.get(field_map["row_hash"])
-        postcode_raw = row.get(field_map["postcode"])
-        street_raw = row.get(field_map["street"])
-        house_number_raw = row.get(field_map["house_number"])
+    inserted = 0
+    for row in _iter_validated_raw_rows(
+        conn,
+        source_name="ppd",
+        raw_table="raw.ppd_row",
+        ingest_run_id=ingest_run_id,
+        field_map=field_map,
+        required_fields=required_fields,
+    ):
+        row_hash_raw = _field_value(row, field_map, "row_hash")
+        postcode_raw = _field_value(row, field_map, "postcode")
+        street_raw = _field_value(row, field_map, "street")
+        house_number_raw = _field_value(row, field_map, "house_number")
 
         if row_hash_raw in (None, "") or postcode_raw in (None, "") or street_raw in (None, ""):
             continue
@@ -1218,31 +1484,11 @@ def _populate_stage_ppd(
                 ingest_run_id,
             )
         )
+        if len(payload) >= STAGE_INSERT_BATCH_SIZE:
+            inserted += _flush_stage_batch(conn, insert_sql, payload)
 
-    return _schema_insert_rows(
-        conn,
-        sql.SQL(
-            """
-            INSERT INTO stage.ppd_parsed_address (
-                build_run_id,
-                row_hash,
-                postcode_norm,
-                house_number,
-                street_token_raw,
-                street_token_casefolded,
-                ingest_run_id
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (build_run_id, row_hash)
-            DO UPDATE SET
-                postcode_norm = EXCLUDED.postcode_norm,
-                house_number = EXCLUDED.house_number,
-                street_token_raw = EXCLUDED.street_token_raw,
-                street_token_casefolded = EXCLUDED.street_token_casefolded,
-                ingest_run_id = EXCLUDED.ingest_run_id
-            """
-        ),
-        payload,
-    )
+    inserted += _flush_stage_batch(conn, insert_sql, payload)
+    return inserted
 
 
 def _pass_0b_stage_normalisation(
@@ -1290,14 +1536,15 @@ def _pass_0b_stage_normalisation(
             conn, build_run_id, ingest_run_id, field_map, required_fields
         )
 
-    if "os_open_linked_identifiers" in source_runs:
-        field_map, required_fields = _mapped_fields_for_source(schema_config, "os_open_linked_identifiers")
-        ingest_run_id = _single_source_run(source_runs, "os_open_linked_identifiers")
-        toid_count, uprn_count = _populate_stage_oli(
+    if "os_open_lids" in source_runs:
+        field_map, required_fields = _mapped_fields_for_source(schema_config, "os_open_lids")
+        ingest_run_id = _single_source_run(source_runs, "os_open_lids")
+        toid_count, uprn_count, relation_count = _populate_stage_oli(
             conn, build_run_id, ingest_run_id, field_map, required_fields
         )
         counts["stage.oli_toid_usrn"] = toid_count
         counts["stage.oli_uprn_usrn"] = uprn_count
+        counts["stage.oli_identifier_pair"] = relation_count
 
     if "nsul" in source_runs:
         field_map, required_fields = _mapped_fields_for_source(schema_config, "nsul")
@@ -1451,6 +1698,80 @@ def _pass_2_gb_canonical_streets(conn: psycopg.Connection, build_run_id: str) ->
     with conn.cursor() as cur:
         cur.execute(
             """
+            WITH direct_usrn AS (
+                SELECT
+                    usrn,
+                    street_name,
+                    street_name_casefolded,
+                    street_class,
+                    street_status,
+                    usrn_run_id
+                FROM stage.streets_usrn_input
+                WHERE build_run_id = %(build_run_id)s
+            ),
+            inferred_name_counts AS (
+                SELECT
+                    oli.usrn,
+                    n.street_name_raw AS street_name,
+                    n.street_name_casefolded,
+                    COUNT(*)::bigint AS evidence_count,
+                    (ARRAY_AGG(oli.ingest_run_id ORDER BY oli.ingest_run_id::text ASC))[1] AS usrn_run_id
+                FROM stage.open_names_road_feature AS n
+                JOIN stage.oli_toid_usrn AS oli
+                  ON oli.build_run_id = n.build_run_id
+                 AND oli.toid = n.toid
+                WHERE n.build_run_id = %(build_run_id)s
+                  AND n.toid IS NOT NULL
+                GROUP BY oli.usrn, n.street_name_raw, n.street_name_casefolded
+            ),
+            inferred_usrn AS (
+                SELECT
+                    usrn,
+                    street_name,
+                    street_name_casefolded,
+                    NULL::text AS street_class,
+                    NULL::text AS street_status,
+                    usrn_run_id
+                FROM (
+                    SELECT
+                        usrn,
+                        street_name,
+                        street_name_casefolded,
+                        usrn_run_id,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY usrn
+                            ORDER BY evidence_count DESC,
+                                     street_name_casefolded COLLATE "C" ASC,
+                                     street_name COLLATE "C" ASC
+                        ) AS rn
+                    FROM inferred_name_counts
+                ) AS ranked
+                WHERE rn = 1
+            ),
+            combined AS (
+                SELECT
+                    usrn,
+                    street_name,
+                    street_name_casefolded,
+                    street_class,
+                    street_status,
+                    usrn_run_id
+                FROM direct_usrn
+                UNION ALL
+                SELECT
+                    inferred.usrn,
+                    inferred.street_name,
+                    inferred.street_name_casefolded,
+                    inferred.street_class,
+                    inferred.street_status,
+                    inferred.usrn_run_id
+                FROM inferred_usrn AS inferred
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM direct_usrn AS direct
+                    WHERE direct.usrn = inferred.usrn
+                )
+            )
             INSERT INTO core.streets_usrn (
                 produced_build_run_id,
                 usrn,
@@ -1461,18 +1782,17 @@ def _pass_2_gb_canonical_streets(conn: psycopg.Connection, build_run_id: str) ->
                 usrn_run_id
             )
             SELECT
-                build_run_id,
+                %(build_run_id)s,
                 usrn,
                 street_name,
                 street_name_casefolded,
                 street_class,
                 street_status,
                 usrn_run_id
-            FROM stage.streets_usrn_input
-            WHERE build_run_id = %s
+            FROM combined
             ORDER BY usrn ASC
             """,
-            (build_run_id,),
+            {"build_run_id": build_run_id},
         )
         inserted = cur.rowcount
 
@@ -1482,7 +1802,7 @@ def _pass_2_gb_canonical_streets(conn: psycopg.Connection, build_run_id: str) ->
 def _pass_3_open_names_candidates(conn: psycopg.Connection, build_run_id: str) -> dict[str, int]:
     schema_config = _schema_config()
     _mapped_fields_for_source(schema_config, "os_open_names")
-    _mapped_fields_for_source(schema_config, "os_open_linked_identifiers")
+    _mapped_fields_for_source(schema_config, "os_open_lids")
 
     with conn.cursor() as cur:
         cur.execute(
@@ -1566,7 +1886,7 @@ def _pass_3_open_names_candidates(conn: psycopg.Connection, build_run_id: str) -
                     source_name,
                     ingest_run_id,
                     evidence_json
-                ) VALUES (%s, %s, %s, %s, %s, 'oli_toid_usrn', 'high', %s, 'os_open_linked_identifiers', %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, 'oli_toid_usrn', 'high', %s, 'os_open_lids', %s, %s)
                 RETURNING candidate_id
                 """,
                 (
@@ -1643,7 +1963,7 @@ def _pass_4_uprn_reinforcement(conn: psycopg.Connection, build_run_id: str) -> d
                 'uprn_usrn',
                 'high',
                 'oli:uprn_usrn:' || a.uprn_count::text || '_uprns',
-                'os_open_linked_identifiers',
+                'os_open_lids',
                 a.oli_ingest_run_id,
                 jsonb_build_object('uprn_count', a.uprn_count)
             FROM aggregate_pairs AS a

@@ -33,7 +33,7 @@ class BundleManifestPpdUpdatesTests(unittest.TestCase):
                 "os_open_names": "33333333-3333-3333-3333-333333333333",
                 "os_open_roads": "44444444-4444-4444-4444-444444444444",
                 "os_open_uprn": "55555555-5555-5555-5555-555555555555",
-                "os_open_linked_identifiers": "66666666-6666-6666-6666-666666666666",
+                "os_open_lids": "66666666-6666-6666-6666-666666666666",
                 "nsul": "77777777-7777-7777-7777-777777777777",
                 "ppd": [
                     "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -60,7 +60,7 @@ class BundleManifestPpdUpdatesTests(unittest.TestCase):
                 "os_open_names": "33333333-3333-3333-3333-333333333333",
                 "os_open_roads": "44444444-4444-4444-4444-444444444444",
                 "os_open_uprn": "55555555-5555-5555-5555-555555555555",
-                "os_open_linked_identifiers": "66666666-6666-6666-6666-666666666666",
+                "os_open_lids": "66666666-6666-6666-6666-666666666666",
                 "nsul": "77777777-7777-7777-7777-777777777777",
             },
         }
@@ -77,7 +77,7 @@ class BundleManifestPpdUpdatesTests(unittest.TestCase):
                 "os_open_names": "33333333-3333-3333-3333-333333333333",
                 "os_open_roads": "44444444-4444-4444-4444-444444444444",
                 "os_open_uprn": "55555555-5555-5555-5555-555555555555",
-                "os_open_linked_identifiers": "66666666-6666-6666-6666-666666666666",
+                "os_open_lids": "66666666-6666-6666-6666-666666666666",
                 "nsul": "77777777-7777-7777-7777-777777777777",
                 "ppd": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
             },

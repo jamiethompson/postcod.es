@@ -37,7 +37,7 @@ RAW_TABLE_BY_SOURCE = {
     "os_open_names": "raw.os_open_names_row",
     "os_open_roads": "raw.os_open_roads_row",
     "os_open_uprn": "raw.os_open_uprn_row",
-    "os_open_linked_identifiers": "raw.os_open_linked_identifiers_row",
+    "os_open_lids": "raw.os_open_lids_row",
     "nsul": "raw.nsul_row",
     "osni_gazetteer": "raw.osni_gazetteer_row",
     "dfi_highway": "raw.dfi_highway_row",
