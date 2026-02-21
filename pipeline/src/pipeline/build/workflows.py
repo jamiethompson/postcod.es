@@ -1215,7 +1215,6 @@ def _populate_stage_open_lids(
                 """
                 WITH extracted AS (
                     SELECT
-                        r.source_row_num,
                         btrim({id_1_expr}) AS left_id,
                         btrim({id_2_expr}) AS right_id,
                         lower(btrim(COALESCE({relation_expr}, ''))) AS relation_hint
@@ -1224,7 +1223,6 @@ def _populate_stage_open_lids(
                 ),
                 prepared AS (
                     SELECT
-                        source_row_num,
                         left_id,
                         right_id,
                         relation_hint,
@@ -1238,7 +1236,6 @@ def _populate_stage_open_lids(
                 ),
                 resolved AS (
                     SELECT
-                        source_row_num,
                         CASE
                             WHEN relation_hint IN ('toid_usrn', 'toid->usrn', 'toid_usrn_link') THEN 'toid_usrn'
                             WHEN relation_hint IN ('uprn_usrn', 'uprn->usrn', 'uprn_usrn_link') THEN 'uprn_usrn'
@@ -1281,7 +1278,6 @@ def _populate_stage_open_lids(
                     %s
                 FROM resolved
                 WHERE resolved.relation_type IS NOT NULL
-                ORDER BY resolved.source_row_num ASC
                 ON CONFLICT (build_run_id, id_1, id_2, relation_type)
                 DO NOTHING
                 """
@@ -1312,7 +1308,6 @@ def _populate_stage_open_lids(
               AND p.ingest_run_id = %s
               AND p.relation_type = 'toid_usrn'
               AND p.id_2 ~ '^[0-9]+$'
-            ORDER BY p.id_1 COLLATE "C" ASC, p.id_2 COLLATE "C" ASC
             ON CONFLICT (build_run_id, toid, usrn)
             DO NOTHING
             """,
@@ -1339,7 +1334,6 @@ def _populate_stage_open_lids(
               AND p.relation_type = 'uprn_usrn'
               AND p.id_1 ~ '^[0-9]+$'
               AND p.id_2 ~ '^[0-9]+$'
-            ORDER BY p.id_1 COLLATE "C" ASC, p.id_2 COLLATE "C" ASC
             ON CONFLICT (build_run_id, uprn, usrn)
             DO NOTHING
             """,
@@ -2844,6 +2838,11 @@ def run_build(
                 raise BuildError(
                     f"Bundle source {source_name} must include exactly one ingest run"
                 )
+
+    with conn.cursor() as cur:
+        # Stage tables are rebuildable; disabling per-transaction fsync waits reduces
+        # pass runtime without changing deterministic outputs.
+        cur.execute("SET synchronous_commit TO off")
 
     if resume:
         resumable = _latest_resumable_run(conn, bundle_id)

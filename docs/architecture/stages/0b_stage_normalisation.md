@@ -23,7 +23,8 @@ Transform raw payloads into typed/stable stage contracts consumed by later passe
 - required mapped fields validated per source
 - heavy-volume sources (`os_open_uprn`, `os_open_lids`, `nsul`) use set-based SQL transforms
 - explicit relation typing for LIDS (`toid_usrn`, `uprn_usrn`)
-- raw reads are ordered by `source_row_num` with `(ingest_run_id, source_row_num)` indexes
+- `(ingest_run_id, source_row_num)` indexes support deterministic replay/debug and source-row traceability
+- `stage.*` tables are `UNLOGGED` to reduce write amplification; they are rebuildable from `raw.*`
 
 ## Value Added
 - converts heterogeneous schemas into deterministic internal contracts
