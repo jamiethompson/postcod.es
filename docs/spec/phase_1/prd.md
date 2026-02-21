@@ -231,6 +231,22 @@ After each build, compute:
 
 Store in `meta.dataset_metrics`.
 
+### FR9. Bundle and Run Identifier Strategy
+
+The pipeline must use:
+
+- Human-readable deterministic IDs for release bundles (`bundle_id`)
+- UUIDs for ingest runs (`ingest_run_id`)
+- UUIDs for build runs (`build_run_id`)
+
+Requirements:
+
+- `bundle_id` must be generated from deterministic seeds plus explicit timestamps.
+- `bundle_id` must include a date tag and short hash component.
+- `bundle_id` must include adjective+noun tokens for readability.
+- `bundle_id` uses a frozen noun list.
+- `ingest_run_id` and `build_run_id` remain UUID values.
+
 ## Non-functional Requirements
 
 ### NFR1. Performance
@@ -240,6 +256,7 @@ Store in `meta.dataset_metrics`.
 ### NFR2. Determinism
 - No random ordering
 - Stable ordering in spatial joins
+- `bundle_id` generation must not use implicit wall-clock defaults inside generator functions
 
 ### NFR3. Idempotency
 - Re-running build for same release overwrites derived outputs safely

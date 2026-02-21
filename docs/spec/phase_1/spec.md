@@ -67,6 +67,8 @@ Notes:
         - `util/`
             - `normalise.py`
             - `hashing.py`
+            - `ids.py`
+            - `id_words.py`
     - `sql/`
         - `schema.sql`
         - `indexes.sql`
@@ -147,20 +149,85 @@ Fields:
 - `licence`
 - `file_path`
 
-Table: `meta.pipeline_run`
+Table: `meta.release_set`
 
 Fields:
-- `run_id` (uuid)
+- `bundle_id` (text, primary key)
+- `onsud_release_id` (text)
+- `open_uprn_release_id` (text)
+- `open_roads_release_id` (text)
+- `input_fingerprint_sha256` (text)
+- `created_at`
+
+Table: `meta.ingest_run`
+
+Fields:
+- `ingest_run_id` (uuid, primary key)
+- `dataset_key` (`onsud|open_uprn|open_roads`)
+- `release_id`
 - `started_at`
 - `finished_at`
 - `status`
-- `release_map` (json)
+- `log_path`
+
+Table: `meta.build_run`
+
+Fields:
+- `build_run_id` (uuid, primary key)
+- `bundle_id` (text, foreign key -> `meta.release_set.bundle_id`)
+- `build_target` (`core|derived|metrics`)
+- `started_at`
+- `finished_at`
+- `status`
 - `log_path`
 
 Rules:
 - Every derived build references exact `release_id` values
 - Raw data is immutable
 - Rebuilds must be deterministic
+- `bundle_id` must be generated from explicit inputs only (no implicit `utcnow()` fallback inside generator functions)
+- `ingest_run_id` and `build_run_id` must be UUID values
+
+### 5.1 Bundle ID Generation Contract (2026-02-21)
+
+The pipeline uses a human-readable deterministic `bundle_id`.
+
+`bundle_id` values are lowercased and normalised with `re.sub(r"[^a-z0-9_]", "", value)`.
+
+Inputs:
+- `seed` (text): `"{onsud_release_id}|{open_uprn_release_id}|{open_roads_release_id}"`
+- `created_at` (timestamp): supplied by caller
+
+Steps:
+1. `digest = sha256(seed).digest()`
+2. `digest_hex = sha256(seed).hexdigest()`
+3. `adjective = ADJECTIVES_64[digest[0] % 64]`
+4. `noun = BUNDLE_NOUNS_256[digest[1]]`
+5. `hash6 = digest_hex[:6]`
+6. `yyyymm = created_at.strftime("%Y%m")`
+7. Build: `v<yyyymm>_<adjective>_<bundle_noun>_<hash6>`
+
+Format:
+- `v<yyyymm>_<adjective>_<bundle_noun>_<hash6>`
+
+Rules:
+- Max 63 chars (PostgreSQL-safe identifier)
+- Bundle noun list must be `BUNDLE_NOUNS_256` (rocks/minerals domain)
+
+Example:
+- `v202602_beefy_granite_a91f3b`
+
+#### Frozen vocabulary rule
+
+- `ADJECTIVES_64` must contain exactly 64 entries.
+- `BUNDLE_NOUNS_256` must contain exactly 256 entries.
+- Lists are append-only after first production release; never reorder existing items.
+
+### 5.2 Ingest and Build Run ID Contract (2026-02-21)
+
+- `ingest_run_id` is generated as UUIDv4.
+- `build_run_id` is generated as UUIDv4.
+- UUID generation is intentionally non-deterministic and is used only for run instance identity.
 
 ## 6. Normalisation Rules
 
@@ -249,11 +316,13 @@ Insert into `meta.dataset_metrics`
 - `pipeline ingest open-uprn --release-id <id> --file <path>`
 - `pipeline ingest open-roads --release-id <id> --file <path>`
 
-- `pipeline build core --onsud <id> --open-uprn <id> --open-roads <id>`
+- `pipeline release-set create --onsud <id> --open-uprn <id> --open-roads <id>`
 
-- `pipeline build derived street-spatial --onsud <id> --open-uprn <id> --open-roads <id>`
+- `pipeline build core --bundle-id <id>`
 
-- `pipeline metrics compute --onsud <id> --open-uprn <id> --open-roads <id>`
+- `pipeline build derived street-spatial --bundle-id <id>`
+
+- `pipeline metrics compute --bundle-id <id>`
 
 ## 11. Acceptance Criteria
 
