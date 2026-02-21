@@ -22,7 +22,7 @@ Determinism confirmation:
 - Tie-break remains stable and explicit (`distance`, then `segment_id`).
 
 Spec update confirmation:
-- Updated `/Users/jamie/code/postcod.es/docs/spec/phase_1/spec.md` to reflect runtime query contract and dated change note.
+- Updated `docs/spec/phase_1/spec.md` to reflect runtime query contract and dated change note.
 
 ## 2026-02-20 — CHG-0002
 
@@ -53,7 +53,7 @@ Determinism confirmation:
 - Rebuild path remains explicit via `--rebuild`.
 
 Spec update confirmation:
-- Updated `/Users/jamie/code/postcod.es/docs/spec/phase_1/spec.md` with resume CLI and checkpoint table contract.
+- Updated `docs/spec/phase_1/spec.md` with resume CLI and checkpoint table contract.
 
 ## 2026-02-20 — CHG-0003
 
@@ -84,4 +84,4 @@ Determinism confirmation:
 - Resume continues by skipping only completed table-level checkpoints.
 
 Spec update confirmation:
-- Updated `/Users/jamie/code/postcod.es/docs/spec/phase_1/spec.md` to lock table-level checkpoint behavior.
+- Updated `docs/spec/phase_1/spec.md` to lock table-level checkpoint behavior.

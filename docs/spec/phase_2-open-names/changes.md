@@ -25,7 +25,7 @@ Determinism confirmation:
 - Determinism validated through contract tests.
 
 Spec update confirmation:
-- Updated `/Users/jamie/code/postcod.es/docs/spec/phase_2-open-names/spec.md` and added `/Users/jamie/code/postcod.es/docs/spec/phase_2-open-names/voronoi_method.md`.
+- Updated `docs/spec/phase_2-open-names/spec.md` and added `docs/spec/phase_2-open-names/voronoi_method.md`.
 
 ## 2026-02-20 — CHG-0002
 
@@ -62,8 +62,8 @@ Determinism confirmation:
 
 Spec update confirmation:
 - Updated:
-  - `/Users/jamie/code/postcod.es/docs/spec/phase_2-open-names/spec.md`
-  - `/Users/jamie/code/postcod.es/docs/spec/phase_2-open-names/prd.md`
+  - `docs/spec/phase_2-open-names/spec.md`
+  - `docs/spec/phase_2-open-names/prd.md`
 
 ## 2026-02-20 — CHG-0003
 
@@ -94,4 +94,4 @@ Determinism confirmation:
 - No row-order-dependent seed selection is used.
 
 Spec update confirmation:
-- Updated `/Users/jamie/code/postcod.es/docs/spec/phase_2-open-names/spec.md`.
+- Updated `docs/spec/phase_2-open-names/spec.md`.

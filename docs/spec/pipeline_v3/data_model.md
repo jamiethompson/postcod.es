@@ -73,3 +73,8 @@ Disambiguation-only table. Never exposed to API reader role.
 - `api.postcode_street_lookup__<dataset_version>`
 - `api.postcode_lookup__<dataset_version>`
 - stable views: `api.postcode_street_lookup`, `api.postcode_lookup`
+
+## Cross-links
+- Architecture relationships: [`../../architecture/relationships-overview.md`](../../architecture/relationships-overview.md)
+- Dataset lineage pages: [`../../architecture/datasets/README.md`](../../architecture/datasets/README.md)
+- Stage/pass pages: [`../../architecture/stages/README.md`](../../architecture/stages/README.md)

@@ -5,6 +5,10 @@ Produce deterministic, replayable postcode/street outputs from open-source inges
 
 ## Golden Path
 1. Read V3 spec docs:
+   - `docs/architecture/README.md`
+   - `docs/architecture/relationships-overview.md`
+   - `docs/architecture/datasets/README.md`
+   - `docs/architecture/stages/README.md`
    - `docs/spec/pipeline_v3/spec.md`
    - `docs/spec/pipeline_v3/data_model.md`
    - `docs/spec/pipeline_v3/canonicalisation.md`
@@ -29,3 +33,4 @@ Produce deterministic, replayable postcode/street outputs from open-source inges
 - Prefer explicit failure over implicit behavior.
 - Capture unknowns in docs + validation.
 - Keep all time and ordering deterministic.
+- Keep documentation in step with any behavior change in the same workstream.

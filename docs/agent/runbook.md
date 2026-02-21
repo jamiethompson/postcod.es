@@ -41,3 +41,4 @@ pipeline --dsn "dbname=postcodes_v3" build publish --build-run-id <build_run_id>
 - Fail fast on schema/field mismatches.
 - Do not patch raw data; fix logic/mapping and rebuild.
 - Record behavior changes in `docs/spec/pipeline_v3/` docs in the same PR.
+- Keep architecture docs in sync: `docs/architecture/`.

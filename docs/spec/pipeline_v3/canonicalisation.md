@@ -46,3 +46,7 @@ Probability ranking (descending) uses:
 ## Timezone
 
 All metadata timestamps are UTC.
+
+## Cross-links
+- Pass finalisation behavior: [`../../architecture/stages/8_finalisation.md`](../../architecture/stages/8_finalisation.md)
+- Value-added summary: [`../../architecture/value-added-by-stage.md`](../../architecture/value-added-by-stage.md)

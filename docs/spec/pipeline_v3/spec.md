@@ -102,3 +102,8 @@ Final outputs use relational provenance:
 - `derived.postcode_streets_final_source`
 
 Arrays and JSON payloads are projection-only conveniences in `api.*` tables/views.
+
+## 8. Architecture Cross-links
+- Architecture index: [`../../architecture/README.md`](../../architecture/README.md)
+- Dataset lineage pages: [`../../architecture/datasets/README.md`](../../architecture/datasets/README.md)
+- Stage/pass pages: [`../../architecture/stages/README.md`](../../architecture/stages/README.md)

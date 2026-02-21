@@ -22,3 +22,9 @@
 ## Tests
 - Test suite root: `tests/`
 - Focus on deterministic behavior, schema validation, provenance contracts, and pass semantics.
+
+## Documentation Cross-links
+- Architecture index: `docs/architecture/README.md`
+- Dataset lineage pages: `docs/architecture/datasets/README.md`
+- Stage/pass pages: `docs/architecture/stages/README.md`
+- Spec authority: `docs/spec/pipeline_v3/`
