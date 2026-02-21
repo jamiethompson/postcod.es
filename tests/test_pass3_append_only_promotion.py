@@ -11,7 +11,7 @@ class Pass3AppendOnlyPromotionTests(unittest.TestCase):
         text = WORKFLOWS.read_text(encoding="utf-8")
         self.assertIn("def _pass_3_open_names_candidates", text)
         self.assertIn("INSERT INTO derived.postcode_street_candidates", text)
-        self.assertIn("'oli_toid_usrn'", text)
+        self.assertIn("'open_lids_toid_usrn'", text)
         self.assertIn("INSERT INTO derived.postcode_street_candidate_lineage", text)
         self.assertIn("promotion_toid_usrn", text)
 

@@ -84,7 +84,7 @@ RAW_TABLE_BY_SOURCE = {
 
 CANDIDATE_TYPES = (
     "names_postcode_feature",
-    "oli_toid_usrn",
+    "open_lids_toid_usrn",
     "uprn_usrn",
     "spatial_os_open_roads",
     "osni_gazetteer_direct",
@@ -600,6 +600,57 @@ def _field_value(row: dict[str, Any], field_map: dict[str, str], logical_key: st
     return None
 
 
+def _validated_raw_sample_row(
+    conn: psycopg.Connection,
+    *,
+    source_name: str,
+    raw_table: str,
+    ingest_run_id: str,
+    field_map: dict[str, str],
+    required_fields: tuple[str, ...],
+) -> dict[str, Any]:
+    schema_name, table_name = raw_table.split(".", 1)
+    with conn.cursor() as cur:
+        cur.execute(
+            sql.SQL(
+                """
+                SELECT payload_jsonb
+                FROM {}.{}
+                WHERE ingest_run_id = %s
+                ORDER BY source_row_num ASC
+                LIMIT 1
+                """
+            ).format(sql.Identifier(schema_name), sql.Identifier(table_name)),
+            (ingest_run_id,),
+        )
+        row = cur.fetchone()
+    if row is None:
+        raise BuildError(f"Raw source is empty for {source_name}; cannot stage-normalise")
+
+    sample_row = row[0]
+    _assert_required_mapped_fields_present(
+        source_name=source_name,
+        sample_row=sample_row,
+        field_map=field_map,
+        required_fields=required_fields,
+    )
+    return sample_row
+
+
+def _json_text_from_candidates(payload_expr: sql.SQL, candidates: tuple[str, ...]) -> sql.SQL:
+    if len(candidates) == 0:
+        return sql.SQL("NULL")
+    lookups = [
+        sql.SQL("{} ->> {}").format(payload_expr, sql.Literal(candidate))
+        for candidate in candidates
+    ]
+    return sql.SQL("COALESCE({})").format(sql.SQL(", ").join(lookups))
+
+
+def _json_text_for_field(payload_expr: sql.SQL, field_map: dict[str, str], logical_key: str) -> sql.SQL:
+    return _json_text_from_candidates(payload_expr, _field_name_candidates(field_map, logical_key))
+
+
 def _schema_insert_rows(
     conn: psycopg.Connection,
     query: sql.SQL,
@@ -630,9 +681,9 @@ def _stage_cleanup(conn: psycopg.Connection, build_run_id: str) -> None:
         "stage.dfi_road_segment",
         "stage.osni_street_point",
         "stage.nsul_uprn_postcode",
-        "stage.oli_uprn_usrn",
-        "stage.oli_toid_usrn",
-        "stage.oli_identifier_pair",
+        "stage.open_lids_uprn_usrn",
+        "stage.open_lids_toid_usrn",
+        "stage.open_lids_pair",
         "stage.uprn_point",
         "stage.open_roads_segment",
         "stage.open_names_road_feature",
@@ -1068,181 +1119,235 @@ def _populate_stage_open_uprn(
     field_map: dict[str, str],
     required_fields: tuple[str, ...],
 ) -> int:
-    insert_sql = sql.SQL(
-        """
-        INSERT INTO stage.uprn_point (
-            build_run_id,
-            uprn,
-            postcode_norm,
-            ingest_run_id
-        ) VALUES (%s, %s, %s, %s)
-        ON CONFLICT (build_run_id, uprn)
-        DO UPDATE SET
-            postcode_norm = EXCLUDED.postcode_norm,
-            ingest_run_id = EXCLUDED.ingest_run_id
-        """
-    )
-
-    payload: list[tuple[Any, ...]] = []
-    inserted = 0
-    postcode_key = field_map.get("postcode")
-    for row in _iter_validated_raw_rows(
+    _validated_raw_sample_row(
         conn,
         source_name="os_open_uprn",
         raw_table="raw.os_open_uprn_row",
         ingest_run_id=ingest_run_id,
         field_map=field_map,
         required_fields=required_fields,
-    ):
-        uprn_raw = _field_value(row, field_map, "uprn")
-        if uprn_raw in (None, ""):
-            continue
-        try:
-            uprn = int(uprn_raw)
-        except Exception:
-            continue
+    )
 
-        postcode_n = postcode_norm(str(row.get(postcode_key)) if postcode_key and row.get(postcode_key) not in (None, "") else None)
+    payload_expr = sql.SQL("r.payload_jsonb")
+    uprn_expr = _json_text_for_field(payload_expr, field_map, "uprn")
+    postcode_expr = _json_text_for_field(payload_expr, field_map, "postcode")
 
-        payload.append((build_run_id, uprn, postcode_n, ingest_run_id))
-        if len(payload) >= STAGE_INSERT_BATCH_SIZE:
-            inserted += _flush_stage_batch(conn, insert_sql, payload)
+    with conn.cursor() as cur:
+        cur.execute(
+            sql.SQL(
+                """
+                WITH extracted AS (
+                    SELECT
+                        r.source_row_num,
+                        btrim({uprn_expr}) AS uprn_text,
+                        btrim({postcode_expr}) AS postcode_text
+                    FROM raw.os_open_uprn_row AS r
+                    WHERE r.ingest_run_id = %s
+                ),
+                filtered AS (
+                    SELECT
+                        source_row_num,
+                        uprn_text::bigint AS uprn,
+                        NULLIF(
+                            upper(regexp_replace(COALESCE(postcode_text, ''), '[^A-Za-z0-9]', '', 'g')),
+                            ''
+                        ) AS postcode_norm
+                    FROM extracted
+                    WHERE uprn_text IS NOT NULL
+                      AND uprn_text <> ''
+                      AND uprn_text ~ '^[0-9]+$'
+                ),
+                deduped AS (
+                    SELECT DISTINCT ON (uprn)
+                        uprn,
+                        postcode_norm
+                    FROM filtered
+                    ORDER BY uprn ASC, source_row_num DESC
+                )
+                INSERT INTO stage.uprn_point (
+                    build_run_id,
+                    uprn,
+                    postcode_norm,
+                    ingest_run_id
+                )
+                SELECT
+                    %s,
+                    d.uprn,
+                    d.postcode_norm,
+                    %s
+                FROM deduped AS d
+                ORDER BY d.uprn ASC
+                ON CONFLICT (build_run_id, uprn)
+                DO UPDATE SET
+                    postcode_norm = EXCLUDED.postcode_norm,
+                    ingest_run_id = EXCLUDED.ingest_run_id
+                """
+            ).format(uprn_expr=uprn_expr, postcode_expr=postcode_expr),
+            (ingest_run_id, build_run_id, ingest_run_id),
+        )
+        return int(cur.rowcount)
 
-    inserted += _flush_stage_batch(conn, insert_sql, payload)
-    return inserted
 
-
-def _infer_lids_relation(
-    relation_raw: Any,
-    left_id: str,
-    right_id: str,
-) -> tuple[str | None, str, str]:
-    relation = str(relation_raw).strip().lower() if relation_raw not in (None, "") else ""
-    left_is_toid = left_id.lower().startswith("osgb")
-    right_is_toid = right_id.lower().startswith("osgb")
-    left_is_digits = left_id.isdigit()
-    right_is_digits = right_id.isdigit()
-
-    if relation in {"toid_usrn", "toid->usrn", "toid_usrn_link"}:
-        return "toid_usrn", left_id, right_id
-    if relation in {"uprn_usrn", "uprn->usrn", "uprn_usrn_link"}:
-        return "uprn_usrn", left_id, right_id
-
-    if left_is_toid and right_is_digits:
-        return "toid_usrn", left_id, right_id
-    if right_is_toid and left_is_digits:
-        return "toid_usrn", right_id, left_id
-
-    if left_is_digits and right_is_digits:
-        # UPRN values are usually longer than USRN values. If ambiguous, keep input order.
-        if len(left_id) > 8 and len(right_id) <= 8:
-            return "uprn_usrn", left_id, right_id
-        if len(right_id) > 8 and len(left_id) <= 8:
-            return "uprn_usrn", right_id, left_id
-        return "uprn_usrn", left_id, right_id
-
-    return None, left_id, right_id
-
-
-def _populate_stage_oli(
+def _populate_stage_open_lids(
     conn: psycopg.Connection,
     build_run_id: str,
     ingest_run_id: str,
     field_map: dict[str, str],
     required_fields: tuple[str, ...],
 ) -> tuple[int, int, int]:
-    toid_insert_sql = sql.SQL(
-        """
-        INSERT INTO stage.oli_toid_usrn (
-            build_run_id,
-            toid,
-            usrn,
-            ingest_run_id
-        ) VALUES (%s, %s, %s, %s)
-        ON CONFLICT (build_run_id, toid, usrn)
-        DO NOTHING
-        """
-    )
-    uprn_insert_sql = sql.SQL(
-        """
-        INSERT INTO stage.oli_uprn_usrn (
-            build_run_id,
-            uprn,
-            usrn,
-            ingest_run_id
-        ) VALUES (%s, %s, %s, %s)
-        ON CONFLICT (build_run_id, uprn, usrn)
-        DO NOTHING
-        """
-    )
-    relation_insert_sql = sql.SQL(
-        """
-        INSERT INTO stage.oli_identifier_pair (
-            build_run_id,
-            id_1,
-            id_2,
-            relation_type,
-            ingest_run_id
-        ) VALUES (%s, %s, %s, %s, %s)
-        ON CONFLICT (build_run_id, id_1, id_2, relation_type)
-        DO NOTHING
-        """
-    )
-
-    toid_payload: list[tuple[Any, ...]] = []
-    uprn_payload: list[tuple[Any, ...]] = []
-    relation_payload: list[tuple[Any, ...]] = []
-    relation_key = field_map.get("relation_type")
-    toid_count = 0
-    uprn_count = 0
-    relation_count = 0
-    for row in _iter_validated_raw_rows(
+    _validated_raw_sample_row(
         conn,
         source_name="os_open_lids",
         raw_table="raw.os_open_lids_row",
         ingest_run_id=ingest_run_id,
         field_map=field_map,
         required_fields=required_fields,
-    ):
-        relation_raw = row.get(relation_key) if relation_key else None
-        left_raw = _field_value(row, field_map, "id_1")
-        right_raw = _field_value(row, field_map, "id_2")
-        if left_raw in (None, "") or right_raw in (None, ""):
-            continue
+    )
 
-        left_id = str(left_raw).strip()
-        right_id = str(right_raw).strip()
-        relation, rel_left_id, rel_right_id = _infer_lids_relation(relation_raw, left_id, right_id)
-        if relation is None:
-            continue
+    payload_expr = sql.SQL("r.payload_jsonb")
+    id_1_expr = _json_text_for_field(payload_expr, field_map, "id_1")
+    id_2_expr = _json_text_for_field(payload_expr, field_map, "id_2")
+    relation_expr = _json_text_for_field(payload_expr, field_map, "relation_type")
 
-        relation_payload.append((build_run_id, rel_left_id, rel_right_id, relation, ingest_run_id))
+    with conn.cursor() as cur:
+        cur.execute(
+            sql.SQL(
+                """
+                WITH extracted AS (
+                    SELECT
+                        r.source_row_num,
+                        btrim({id_1_expr}) AS left_id,
+                        btrim({id_2_expr}) AS right_id,
+                        lower(btrim(COALESCE({relation_expr}, ''))) AS relation_hint
+                    FROM raw.os_open_lids_row AS r
+                    WHERE r.ingest_run_id = %s
+                ),
+                prepared AS (
+                    SELECT
+                        source_row_num,
+                        left_id,
+                        right_id,
+                        relation_hint,
+                        (left_id IS NOT NULL AND left_id <> '') AS left_present,
+                        (right_id IS NOT NULL AND right_id <> '') AS right_present,
+                        (lower(COALESCE(left_id, '')) LIKE 'osgb%') AS left_is_toid,
+                        (lower(COALESCE(right_id, '')) LIKE 'osgb%') AS right_is_toid,
+                        (COALESCE(left_id, '') ~ '^[0-9]+$') AS left_is_digits,
+                        (COALESCE(right_id, '') ~ '^[0-9]+$') AS right_is_digits
+                    FROM extracted
+                ),
+                resolved AS (
+                    SELECT
+                        source_row_num,
+                        CASE
+                            WHEN relation_hint IN ('toid_usrn', 'toid->usrn', 'toid_usrn_link') THEN 'toid_usrn'
+                            WHEN relation_hint IN ('uprn_usrn', 'uprn->usrn', 'uprn_usrn_link') THEN 'uprn_usrn'
+                            WHEN left_is_toid AND right_is_digits THEN 'toid_usrn'
+                            WHEN right_is_toid AND left_is_digits THEN 'toid_usrn'
+                            WHEN left_is_digits AND right_is_digits THEN 'uprn_usrn'
+                            ELSE NULL
+                        END AS relation_type,
+                        CASE
+                            WHEN relation_hint IN ('toid_usrn', 'toid->usrn', 'toid_usrn_link') THEN left_id
+                            WHEN relation_hint IN ('uprn_usrn', 'uprn->usrn', 'uprn_usrn_link') THEN left_id
+                            WHEN left_is_toid AND right_is_digits THEN left_id
+                            WHEN right_is_toid AND left_is_digits THEN right_id
+                            WHEN left_is_digits AND right_is_digits AND length(right_id) > 8 AND length(left_id) <= 8 THEN right_id
+                            ELSE left_id
+                        END AS id_1,
+                        CASE
+                            WHEN relation_hint IN ('toid_usrn', 'toid->usrn', 'toid_usrn_link') THEN right_id
+                            WHEN relation_hint IN ('uprn_usrn', 'uprn->usrn', 'uprn_usrn_link') THEN right_id
+                            WHEN left_is_toid AND right_is_digits THEN right_id
+                            WHEN right_is_toid AND left_is_digits THEN left_id
+                            WHEN left_is_digits AND right_is_digits AND length(right_id) > 8 AND length(left_id) <= 8 THEN left_id
+                            ELSE right_id
+                        END AS id_2
+                    FROM prepared
+                    WHERE left_present AND right_present
+                )
+                INSERT INTO stage.open_lids_pair (
+                    build_run_id,
+                    id_1,
+                    id_2,
+                    relation_type,
+                    ingest_run_id
+                )
+                SELECT
+                    %s,
+                    resolved.id_1,
+                    resolved.id_2,
+                    resolved.relation_type,
+                    %s
+                FROM resolved
+                WHERE resolved.relation_type IS NOT NULL
+                ORDER BY resolved.source_row_num ASC
+                ON CONFLICT (build_run_id, id_1, id_2, relation_type)
+                DO NOTHING
+                """
+            ).format(
+                id_1_expr=id_1_expr,
+                id_2_expr=id_2_expr,
+                relation_expr=relation_expr,
+            ),
+            (ingest_run_id, build_run_id, ingest_run_id),
+        )
+        pair_count = int(cur.rowcount)
 
-        if relation == "toid_usrn":
-            try:
-                usrn = int(rel_right_id)
-            except Exception:
-                continue
-            toid_payload.append((build_run_id, rel_left_id, usrn, ingest_run_id))
-        elif relation == "uprn_usrn":
-            try:
-                uprn = int(rel_left_id)
-                usrn = int(rel_right_id)
-            except Exception:
-                continue
-            uprn_payload.append((build_run_id, uprn, usrn, ingest_run_id))
+        cur.execute(
+            """
+            INSERT INTO stage.open_lids_toid_usrn (
+                build_run_id,
+                toid,
+                usrn,
+                ingest_run_id
+            )
+            SELECT
+                %s,
+                p.id_1,
+                p.id_2::bigint,
+                %s
+            FROM stage.open_lids_pair AS p
+            WHERE p.build_run_id = %s
+              AND p.ingest_run_id = %s
+              AND p.relation_type = 'toid_usrn'
+              AND p.id_2 ~ '^[0-9]+$'
+            ORDER BY p.id_1 COLLATE "C" ASC, p.id_2 COLLATE "C" ASC
+            ON CONFLICT (build_run_id, toid, usrn)
+            DO NOTHING
+            """,
+            (build_run_id, ingest_run_id, build_run_id, ingest_run_id),
+        )
+        toid_count = int(cur.rowcount)
 
-        if len(toid_payload) >= STAGE_INSERT_BATCH_SIZE:
-            toid_count += _flush_stage_batch(conn, toid_insert_sql, toid_payload)
-        if len(uprn_payload) >= STAGE_INSERT_BATCH_SIZE:
-            uprn_count += _flush_stage_batch(conn, uprn_insert_sql, uprn_payload)
-        if len(relation_payload) >= STAGE_INSERT_BATCH_SIZE:
-            relation_count += _flush_stage_batch(conn, relation_insert_sql, relation_payload)
+        cur.execute(
+            """
+            INSERT INTO stage.open_lids_uprn_usrn (
+                build_run_id,
+                uprn,
+                usrn,
+                ingest_run_id
+            )
+            SELECT
+                %s,
+                p.id_1::bigint,
+                p.id_2::bigint,
+                %s
+            FROM stage.open_lids_pair AS p
+            WHERE p.build_run_id = %s
+              AND p.ingest_run_id = %s
+              AND p.relation_type = 'uprn_usrn'
+              AND p.id_1 ~ '^[0-9]+$'
+              AND p.id_2 ~ '^[0-9]+$'
+            ORDER BY p.id_1 COLLATE "C" ASC, p.id_2 COLLATE "C" ASC
+            ON CONFLICT (build_run_id, uprn, usrn)
+            DO NOTHING
+            """,
+            (build_run_id, ingest_run_id, build_run_id, ingest_run_id),
+        )
+        uprn_count = int(cur.rowcount)
 
-    toid_count += _flush_stage_batch(conn, toid_insert_sql, toid_payload)
-    uprn_count += _flush_stage_batch(conn, uprn_insert_sql, uprn_payload)
-    relation_count += _flush_stage_batch(conn, relation_insert_sql, relation_payload)
-    return toid_count, uprn_count, relation_count
+    return toid_count, uprn_count, pair_count
 
 
 def _populate_stage_nsul(
@@ -1252,46 +1357,63 @@ def _populate_stage_nsul(
     field_map: dict[str, str],
     required_fields: tuple[str, ...],
 ) -> int:
-    insert_sql = sql.SQL(
-        """
-        INSERT INTO stage.nsul_uprn_postcode (
-            build_run_id,
-            uprn,
-            postcode_norm,
-            ingest_run_id
-        ) VALUES (%s, %s, %s, %s)
-        ON CONFLICT (build_run_id, uprn, postcode_norm)
-        DO NOTHING
-        """
-    )
-
-    payload: list[tuple[Any, ...]] = []
-    inserted = 0
-    for row in _iter_validated_raw_rows(
+    _validated_raw_sample_row(
         conn,
         source_name="nsul",
         raw_table="raw.nsul_row",
         ingest_run_id=ingest_run_id,
         field_map=field_map,
         required_fields=required_fields,
-    ):
-        uprn_raw = _field_value(row, field_map, "uprn")
-        postcode_raw = _field_value(row, field_map, "postcode")
-        if uprn_raw in (None, ""):
-            continue
-        try:
-            uprn = int(uprn_raw)
-        except Exception:
-            continue
-        postcode_n = postcode_norm(str(postcode_raw) if postcode_raw is not None else None)
-        if postcode_n is None:
-            continue
-        payload.append((build_run_id, uprn, postcode_n, ingest_run_id))
-        if len(payload) >= STAGE_INSERT_BATCH_SIZE:
-            inserted += _flush_stage_batch(conn, insert_sql, payload)
+    )
 
-    inserted += _flush_stage_batch(conn, insert_sql, payload)
-    return inserted
+    payload_expr = sql.SQL("r.payload_jsonb")
+    uprn_expr = _json_text_for_field(payload_expr, field_map, "uprn")
+    postcode_expr = _json_text_for_field(payload_expr, field_map, "postcode")
+
+    with conn.cursor() as cur:
+        cur.execute(
+            sql.SQL(
+                """
+                WITH extracted AS (
+                    SELECT
+                        btrim({uprn_expr}) AS uprn_text,
+                        btrim({postcode_expr}) AS postcode_text
+                    FROM raw.nsul_row AS r
+                    WHERE r.ingest_run_id = %s
+                ),
+                normalized AS (
+                    SELECT DISTINCT
+                        uprn_text::bigint AS uprn,
+                        NULLIF(
+                            upper(regexp_replace(COALESCE(postcode_text, ''), '[^A-Za-z0-9]', '', 'g')),
+                            ''
+                        ) AS postcode_norm
+                    FROM extracted
+                    WHERE uprn_text IS NOT NULL
+                      AND uprn_text <> ''
+                      AND uprn_text ~ '^[0-9]+$'
+                )
+                INSERT INTO stage.nsul_uprn_postcode (
+                    build_run_id,
+                    uprn,
+                    postcode_norm,
+                    ingest_run_id
+                )
+                SELECT
+                    %s,
+                    n.uprn,
+                    n.postcode_norm,
+                    %s
+                FROM normalized AS n
+                WHERE n.postcode_norm IS NOT NULL
+                ORDER BY n.uprn ASC, n.postcode_norm COLLATE "C" ASC
+                ON CONFLICT (build_run_id, uprn, postcode_norm)
+                DO NOTHING
+                """
+            ).format(uprn_expr=uprn_expr, postcode_expr=postcode_expr),
+            (ingest_run_id, build_run_id, ingest_run_id),
+        )
+        return int(cur.rowcount)
 
 
 def _populate_stage_osni(
@@ -1539,12 +1661,12 @@ def _pass_0b_stage_normalisation(
     if "os_open_lids" in source_runs:
         field_map, required_fields = _mapped_fields_for_source(schema_config, "os_open_lids")
         ingest_run_id = _single_source_run(source_runs, "os_open_lids")
-        toid_count, uprn_count, relation_count = _populate_stage_oli(
+        toid_count, uprn_count, relation_count = _populate_stage_open_lids(
             conn, build_run_id, ingest_run_id, field_map, required_fields
         )
-        counts["stage.oli_toid_usrn"] = toid_count
-        counts["stage.oli_uprn_usrn"] = uprn_count
-        counts["stage.oli_identifier_pair"] = relation_count
+        counts["stage.open_lids_toid_usrn"] = toid_count
+        counts["stage.open_lids_uprn_usrn"] = uprn_count
+        counts["stage.open_lids_pair"] = relation_count
 
     if "nsul" in source_runs:
         field_map, required_fields = _mapped_fields_for_source(schema_config, "nsul")
@@ -1711,18 +1833,18 @@ def _pass_2_gb_canonical_streets(conn: psycopg.Connection, build_run_id: str) ->
             ),
             inferred_name_counts AS (
                 SELECT
-                    oli.usrn,
+                    lids.usrn,
                     n.street_name_raw AS street_name,
                     n.street_name_casefolded,
                     COUNT(*)::bigint AS evidence_count,
-                    (ARRAY_AGG(oli.ingest_run_id ORDER BY oli.ingest_run_id::text ASC))[1] AS usrn_run_id
+                    (ARRAY_AGG(lids.ingest_run_id ORDER BY lids.ingest_run_id::text ASC))[1] AS usrn_run_id
                 FROM stage.open_names_road_feature AS n
-                JOIN stage.oli_toid_usrn AS oli
-                  ON oli.build_run_id = n.build_run_id
-                 AND oli.toid = n.toid
+                JOIN stage.open_lids_toid_usrn AS lids
+                  ON lids.build_run_id = n.build_run_id
+                 AND lids.toid = n.toid
                 WHERE n.build_run_id = %(build_run_id)s
                   AND n.toid IS NOT NULL
-                GROUP BY oli.usrn, n.street_name_raw, n.street_name_casefolded
+                GROUP BY lids.usrn, n.street_name_raw, n.street_name_casefolded
             ),
             inferred_usrn AS (
                 SELECT
@@ -1855,23 +1977,31 @@ def _pass_3_open_names_candidates(conn: psycopg.Connection, build_run_id: str) -
                 parent.street_name_raw,
                 parent.street_name_canonical,
                 parent.evidence_json ->> 'toid' AS toid,
-                oli.usrn,
-                oli.ingest_run_id
+                lids.usrn,
+                lids.ingest_run_id
             FROM derived.postcode_street_candidates AS parent
-            JOIN stage.oli_toid_usrn AS oli
-              ON oli.build_run_id = parent.produced_build_run_id
-             AND oli.toid = parent.evidence_json ->> 'toid'
+            JOIN stage.open_lids_toid_usrn AS lids
+              ON lids.build_run_id = parent.produced_build_run_id
+             AND lids.toid = parent.evidence_json ->> 'toid'
             WHERE parent.produced_build_run_id = %s
               AND parent.candidate_type = 'names_postcode_feature'
               AND parent.evidence_json ->> 'toid' IS NOT NULL
-            ORDER BY parent.candidate_id ASC, oli.usrn ASC
+            ORDER BY parent.candidate_id ASC, lids.usrn ASC
             """,
             (build_run_id,),
         )
         promotion_rows = cur.fetchall()
 
     with conn.cursor() as cur:
-        for parent_candidate_id, postcode, street_name_raw, street_name_canonical, toid, usrn, oli_run_id in promotion_rows:
+        for (
+            parent_candidate_id,
+            postcode,
+            street_name_raw,
+            street_name_canonical,
+            toid,
+            usrn,
+            open_lids_run_id,
+        ) in promotion_rows:
             cur.execute(
                 """
                 INSERT INTO derived.postcode_street_candidates (
@@ -1886,7 +2016,7 @@ def _pass_3_open_names_candidates(conn: psycopg.Connection, build_run_id: str) -
                     source_name,
                     ingest_run_id,
                     evidence_json
-                ) VALUES (%s, %s, %s, %s, %s, 'oli_toid_usrn', 'high', %s, 'os_open_lids', %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, 'open_lids_toid_usrn', 'high', %s, 'os_open_lids', %s, %s)
                 RETURNING candidate_id
                 """,
                 (
@@ -1895,8 +2025,8 @@ def _pass_3_open_names_candidates(conn: psycopg.Connection, build_run_id: str) -
                     street_name_raw,
                     street_name_canonical,
                     usrn,
-                    f"oli:toid_usrn:{toid}",
-                    oli_run_id,
+                    f"open_lids:toid_usrn:{toid}",
+                    open_lids_run_id,
                     Jsonb({"toid": toid, "usrn": usrn}),
                 ),
             )
@@ -1931,15 +2061,15 @@ def _pass_4_uprn_reinforcement(conn: psycopg.Connection, build_run_id: str) -> d
             WITH aggregate_pairs AS (
                 SELECT
                     nsul.postcode_norm,
-                    oli.usrn,
+                    lids.usrn,
                     COUNT(*)::bigint AS uprn_count,
-                    (ARRAY_AGG(oli.ingest_run_id ORDER BY oli.ingest_run_id::text ASC))[1] AS oli_ingest_run_id
+                    (ARRAY_AGG(lids.ingest_run_id ORDER BY lids.ingest_run_id::text ASC))[1] AS open_lids_ingest_run_id
                 FROM stage.nsul_uprn_postcode AS nsul
-                JOIN stage.oli_uprn_usrn AS oli
-                  ON oli.build_run_id = nsul.build_run_id
-                 AND oli.uprn = nsul.uprn
+                JOIN stage.open_lids_uprn_usrn AS lids
+                  ON lids.build_run_id = nsul.build_run_id
+                 AND lids.uprn = nsul.uprn
                 WHERE nsul.build_run_id = %s
-                GROUP BY nsul.postcode_norm, oli.usrn
+                GROUP BY nsul.postcode_norm, lids.usrn
             )
             INSERT INTO derived.postcode_street_candidates (
                 produced_build_run_id,
@@ -1962,9 +2092,9 @@ def _pass_4_uprn_reinforcement(conn: psycopg.Connection, build_run_id: str) -> d
                 a.usrn,
                 'uprn_usrn',
                 'high',
-                'oli:uprn_usrn:' || a.uprn_count::text || '_uprns',
+                'open_lids:uprn_usrn:' || a.uprn_count::text || '_uprns',
                 'os_open_lids',
-                a.oli_ingest_run_id,
+                a.open_lids_ingest_run_id,
                 jsonb_build_object('uprn_count', a.uprn_count)
             FROM aggregate_pairs AS a
             JOIN core.postcodes AS p

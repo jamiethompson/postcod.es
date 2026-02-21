@@ -263,7 +263,7 @@ CREATE TABLE IF NOT EXISTS stage.uprn_point (
     PRIMARY KEY (build_run_id, uprn)
 );
 
-CREATE TABLE IF NOT EXISTS stage.oli_toid_usrn (
+CREATE TABLE IF NOT EXISTS stage.open_lids_toid_usrn (
     build_run_id             uuid NOT NULL REFERENCES meta.build_run (build_run_id) ON DELETE CASCADE,
     toid                     text NOT NULL,
     usrn                     bigint NOT NULL,
@@ -271,7 +271,7 @@ CREATE TABLE IF NOT EXISTS stage.oli_toid_usrn (
     PRIMARY KEY (build_run_id, toid, usrn)
 );
 
-CREATE TABLE IF NOT EXISTS stage.oli_uprn_usrn (
+CREATE TABLE IF NOT EXISTS stage.open_lids_uprn_usrn (
     build_run_id             uuid NOT NULL REFERENCES meta.build_run (build_run_id) ON DELETE CASCADE,
     uprn                     bigint NOT NULL,
     usrn                     bigint NOT NULL,
@@ -386,7 +386,7 @@ CREATE TABLE IF NOT EXISTS derived.postcode_street_candidates (
         REFERENCES meta.ingest_run (run_id),
     CHECK (candidate_type IN (
         'names_postcode_feature',
-        'oli_toid_usrn',
+        'open_lids_toid_usrn',
         'uprn_usrn',
         'spatial_os_open_roads',
         'osni_gazetteer_direct',
@@ -464,7 +464,7 @@ CREATE TABLE IF NOT EXISTS derived.postcode_streets_final_source (
     PRIMARY KEY (final_id, source_name, ingest_run_id, candidate_type),
     CHECK (candidate_type IN (
         'names_postcode_feature',
-        'oli_toid_usrn',
+        'open_lids_toid_usrn',
         'uprn_usrn',
         'spatial_os_open_roads',
         'osni_gazetteer_direct',

@@ -198,6 +198,14 @@ def _insert_raw_rows(
     return total_loaded
 
 
+def _analyze_raw_table(conn: psycopg.Connection, qualified_table: str) -> None:
+    schema_ident, table_ident = _table_ident(qualified_table)
+    with conn.cursor() as cur:
+        cur.execute(
+            sql.SQL("ANALYZE {}.{}").format(schema_ident, table_ident),
+        )
+
+
 def _existing_ingest_run(
     conn: psycopg.Connection,
     source_name: str,
@@ -329,6 +337,8 @@ def ingest_source(conn: psycopg.Connection, manifest: SourceIngestManifest) -> I
             """,
             (total_rows, run_id),
         )
+
+    _analyze_raw_table(conn, raw_table)
 
     return IngestResult(
         source_name=manifest.source_name,
