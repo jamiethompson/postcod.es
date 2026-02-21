@@ -7,9 +7,9 @@ LIDS is the identifier bridge dataset. It resolves relationships between TOID/UP
 - Source key: `os_open_lids`
 - Raw table: `raw.os_open_lids_row`
 - Stage tables:
-  - `stage.oli_identifier_pair` (`id_1`, `id_2`, `relation_type`)
-  - `stage.oli_toid_usrn`
-  - `stage.oli_uprn_usrn`
+  - `stage.open_lids_pair` (`id_1`, `id_2`, `relation_type`)
+  - `stage.open_lids_toid_usrn`
+  - `stage.open_lids_uprn_usrn`
 
 ## Stage Normalisation
 - Generic identifier pairs are normalised first:
@@ -19,7 +19,7 @@ LIDS is the identifier bridge dataset. It resolves relationships between TOID/UP
 
 ## Downstream Transformations
 - Pass 2: helps infer missing canonical USRN names from Open Names TOIDs.
-- Pass 3: confirms TOID-based Open Names evidence, generating `oli_toid_usrn` candidates.
+- Pass 3: confirms TOID-based Open Names evidence, generating `open_lids_toid_usrn` candidates.
 - Pass 4: contributes UPRN->USRN links for high-confidence `uprn_usrn` candidates.
 
 ## Value Added

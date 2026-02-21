@@ -5,12 +5,12 @@ Create medium-confidence street candidates and append-only TOID-confirmed promot
 
 ## Inputs
 - `stage.open_names_road_feature`
-- `stage.oli_toid_usrn`
+- `stage.open_lids_toid_usrn`
 - `core.postcodes`
 
 ## Outputs
 - base candidates: `candidate_type=names_postcode_feature`
-- promoted candidates: `candidate_type=oli_toid_usrn`
+- promoted candidates: `candidate_type=open_lids_toid_usrn`
 - lineage: `derived.postcode_street_candidate_lineage`
 
 ## Contract

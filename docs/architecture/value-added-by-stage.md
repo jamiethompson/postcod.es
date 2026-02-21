@@ -25,22 +25,22 @@ This page explains what new product value is created at each pass, not just what
   - provides postcode centroid/admin metadata context for all later joins
 
 ## Pass 2: Canonical Streets (USRN)
-- Inputs: `stage.streets_usrn_input`, `stage.open_names_road_feature`, `stage.oli_toid_usrn`.
+- Inputs: `stage.streets_usrn_input`, `stage.open_names_road_feature`, `stage.open_lids_toid_usrn`.
 - Output: `core.streets_usrn`.
 - Value added:
   - produces canonical USRN-keyed street dictionary
   - fills gaps by inferring USRN names from Open Names + LIDS TOID mapping when direct names are absent
 
 ## Pass 3: Open Names Candidates
-- Inputs: `stage.open_names_road_feature`, `stage.oli_toid_usrn`, `core.*`.
+- Inputs: `stage.open_names_road_feature`, `stage.open_lids_toid_usrn`, `core.*`.
 - Output: `derived.postcode_street_candidates` + lineage rows.
 - Value added:
   - creates medium-confidence postcode/street evidence from named features
-  - upgrades TOID-confirmed evidence via append-only promotion (`oli_toid_usrn`)
+  - upgrades TOID-confirmed evidence via append-only promotion (`open_lids_toid_usrn`)
   - preserves full evidence chain (immutable parent + promoted child + lineage)
 
 ## Pass 4: UPRN Reinforcement
-- Inputs: `stage.nsul_uprn_postcode`, `stage.oli_uprn_usrn`, `core.*`.
+- Inputs: `stage.nsul_uprn_postcode`, `stage.open_lids_uprn_usrn`, `core.*`.
 - Output: high-confidence `uprn_usrn` candidates.
 - Value added:
   - adds strong evidence using property-level frequency aggregation

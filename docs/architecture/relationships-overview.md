@@ -6,7 +6,7 @@
 ONSPD -> core.postcodes
 OS Open USRN -> core.streets_usrn
 OS Open Names + ONSPD -> candidates (names_postcode_feature)
-OS Open Names + LIDS (TOID->USRN) -> candidates (oli_toid_usrn)
+OS Open Names + LIDS (TOID->USRN) -> candidates (open_lids_toid_usrn)
 OS Open UPRN + NSUL + LIDS (UPRN->USRN) -> candidates (uprn_usrn)
 OS Open Roads + core.postcodes -> fallback candidates (spatial_os_open_roads)
 Optional: PPD -> gap-fill candidates (ppd_parse_*)
@@ -59,9 +59,9 @@ flowchart TB
     S_ONSPD["stage.onspd_postcode"]
     S_USRN["stage.streets_usrn_input"]
     S_NAMES["stage.open_names_road_feature"]
-    S_LIDS_PAIR["stage.oli_identifier_pair"]
-    S_LIDS_TOID["stage.oli_toid_usrn"]
-    S_LIDS_UPRN["stage.oli_uprn_usrn"]
+    S_LIDS_PAIR["stage.open_lids_pair"]
+    S_LIDS_TOID["stage.open_lids_toid_usrn"]
+    S_LIDS_UPRN["stage.open_lids_uprn_usrn"]
     S_UPRN["stage.uprn_point"]
     S_NSUL["stage.nsul_uprn_postcode"]
     S_ROADS["stage.open_roads_segment"]

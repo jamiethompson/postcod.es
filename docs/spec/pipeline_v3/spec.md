@@ -45,7 +45,7 @@ Build pass order is fixed:
 ### 3.1 Pass 3 Promotion Semantics (Append-Only)
 
 - `names_postcode_feature` candidates are immutable evidence rows.
-- TOID confirmation creates a new `oli_toid_usrn` candidate row.
+- TOID confirmation creates a new `open_lids_toid_usrn` candidate row.
 - Promotion lineage is recorded in `derived.postcode_street_candidate_lineage`.
 - Existing candidate rows are never updated for `candidate_type`, `confidence`, `usrn`, or `evidence_ref`.
 
@@ -53,7 +53,7 @@ Build pass order is fixed:
 
 Candidate type enum:
 - `names_postcode_feature`
-- `oli_toid_usrn`
+- `open_lids_toid_usrn`
 - `uprn_usrn`
 - `spatial_os_open_roads`
 - `osni_gazetteer_direct`

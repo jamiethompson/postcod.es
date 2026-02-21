@@ -17,7 +17,7 @@ Open UPRN contributes property-level identity used with NSUL and LIDS to create 
 ## Downstream Transformations
 - Combined with:
   - `stage.nsul_uprn_postcode` (UPRN->postcode)
-  - `stage.oli_uprn_usrn` (UPRN->USRN)
+  - `stage.open_lids_uprn_usrn` (UPRN->USRN)
 - Pass 4 aggregates evidence into `uprn_usrn` high-confidence candidates.
 
 ## Value Added

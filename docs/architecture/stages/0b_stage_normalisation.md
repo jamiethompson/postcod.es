@@ -13,19 +13,21 @@ Transform raw payloads into typed/stable stage contracts consumed by later passe
 - `stage.open_names_road_feature`
 - `stage.open_roads_segment`
 - `stage.uprn_point`
-- `stage.oli_identifier_pair`
-- `stage.oli_toid_usrn`
-- `stage.oli_uprn_usrn`
+- `stage.open_lids_pair`
+- `stage.open_lids_toid_usrn`
+- `stage.open_lids_uprn_usrn`
 - `stage.nsul_uprn_postcode`
 - optional NI/PPD stage tables
 
 ## Determinism/Validation
 - required mapped fields validated per source
-- stream/batch loading to avoid memory variability
+- heavy-volume sources (`os_open_uprn`, `os_open_lids`, `nsul`) use set-based SQL transforms
 - explicit relation typing for LIDS (`toid_usrn`, `uprn_usrn`)
+- raw reads are ordered by `source_row_num` with `(ingest_run_id, source_row_num)` indexes
 
 ## Value Added
 - converts heterogeneous schemas into deterministic internal contracts
+- removes Python row-loop bottlenecks for the largest source feeds
 - surfaces schema drift early
 
 ## Related

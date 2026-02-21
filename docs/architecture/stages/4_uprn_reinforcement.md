@@ -5,7 +5,7 @@ Generate high-confidence `uprn_usrn` candidates by aggregating property-level ev
 
 ## Inputs
 - `stage.nsul_uprn_postcode`
-- `stage.oli_uprn_usrn`
+- `stage.open_lids_uprn_usrn`
 - `core.postcodes`
 - `core.streets_usrn`
 

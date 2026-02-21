@@ -19,7 +19,7 @@ Open Names contributes named road features and optional TOID references, creatin
 
 ## Downstream Transformations
 - Pass 3 inserts `names_postcode_feature` candidates.
-- Pass 3 appends `oli_toid_usrn` candidates when TOID resolves via LIDS.
+- Pass 3 appends `open_lids_toid_usrn` candidates when TOID resolves via LIDS.
 - Pass 3 records append-only lineage in `derived.postcode_street_candidate_lineage`.
 
 ## Value Added
