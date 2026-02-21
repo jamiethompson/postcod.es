@@ -59,7 +59,6 @@ flowchart TB
     S_ONSPD["stage.onspd_postcode"]
     S_USRN["stage.streets_usrn_input"]
     S_NAMES["stage.open_names_road_feature"]
-    S_LIDS_PAIR["stage.open_lids_pair"]
     S_LIDS_TOID["stage.open_lids_toid_usrn"]
     S_LIDS_UPRN["stage.open_lids_uprn_usrn"]
     S_UPRN["stage.uprn_point"]
@@ -127,16 +126,14 @@ flowchart TB
   R_ONSPD --> S_ONSPD
   R_USRN --> S_USRN
   R_NAMES --> S_NAMES
-  R_LIDS --> S_LIDS_PAIR
+  R_LIDS --> S_LIDS_TOID
+  R_LIDS --> S_LIDS_UPRN
   R_UPRN --> S_UPRN
   R_NSUL --> S_NSUL
   R_ROADS --> S_ROADS
   R_OSNI -. optional .-> S_OSNI
   R_DFI -. optional .-> S_DFI
   R_PPD -. optional .-> S_PPD
-
-  S_LIDS_PAIR --> S_LIDS_TOID
-  S_LIDS_PAIR --> S_LIDS_UPRN
 
   S_ONSPD --> C_POST
   S_ONSPD --> C_META

@@ -675,31 +675,63 @@ def _flush_stage_batch(
     return inserted
 
 
-def _stage_cleanup(conn: psycopg.Connection, build_run_id: str) -> None:
-    tables = (
-        "stage.ppd_parsed_address",
-        "stage.dfi_road_segment",
-        "stage.osni_street_point",
-        "stage.nsul_uprn_postcode",
-        "stage.open_lids_uprn_usrn",
-        "stage.open_lids_toid_usrn",
-        "stage.open_lids_pair",
-        "stage.uprn_point",
-        "stage.open_roads_segment",
-        "stage.open_names_road_feature",
-        "stage.streets_usrn_input",
-        "stage.onspd_postcode",
-    )
+STAGE_TABLES = (
+    "stage.ppd_parsed_address",
+    "stage.dfi_road_segment",
+    "stage.osni_street_point",
+    "stage.nsul_uprn_postcode",
+    "stage.open_lids_uprn_usrn",
+    "stage.open_lids_toid_usrn",
+    "stage.open_lids_pair",
+    "stage.uprn_point",
+    "stage.open_roads_segment",
+    "stage.open_names_road_feature",
+    "stage.streets_usrn_input",
+    "stage.onspd_postcode",
+)
+
+
+def _assert_no_other_started_build(conn: psycopg.Connection, build_run_id: str) -> None:
     with conn.cursor() as cur:
-        for table in tables:
-            schema_name, table_name = table.split(".", 1)
-            cur.execute(
-                sql.SQL("DELETE FROM {}.{} WHERE build_run_id = %s").format(
-                    sql.Identifier(schema_name),
-                    sql.Identifier(table_name),
-                ),
-                (build_run_id,),
+        cur.execute(
+            """
+            SELECT build_run_id::text, current_pass
+            FROM meta.build_run
+            WHERE status = 'started'
+              AND build_run_id <> %s
+            ORDER BY started_at_utc ASC
+            LIMIT 1
+            """,
+            (build_run_id,),
+        )
+        row = cur.fetchone()
+
+    if row is not None:
+        other_run_id, current_pass = row
+        raise BuildError(
+            "Stage truncate is unsafe while another build is in status=started; "
+            f"other_build_run_id={other_run_id} other_current_pass={current_pass}"
+        )
+
+
+def _stage_cleanup(conn: psycopg.Connection, build_run_id: str) -> None:
+    _assert_no_other_started_build(conn, build_run_id)
+    table_identifiers = []
+    for table in STAGE_TABLES:
+        schema_name, table_name = table.split(".", 1)
+        table_identifiers.append(
+            sql.SQL("{}.{}").format(
+                sql.Identifier(schema_name),
+                sql.Identifier(table_name),
             )
+        )
+
+    with conn.cursor() as cur:
+        # Stage tables are transient build artifacts; truncation keeps runtime stable
+        # across rebuilds by preventing historical-row/index accumulation.
+        cur.execute(
+            sql.SQL("TRUNCATE TABLE {}").format(sql.SQL(", ").join(table_identifiers))
+        )
 
 
 def _pass_0a_raw_ingest(
@@ -1234,7 +1266,7 @@ def _populate_stage_open_lids(
                         (COALESCE(right_id, '') ~ '^[0-9]+$') AS right_is_digits
                     FROM extracted
                 ),
-                resolved AS (
+                resolved AS MATERIALIZED (
                     SELECT
                         CASE
                             WHEN relation_hint IN ('toid_usrn', 'toid->usrn', 'toid_usrn_link') THEN 'toid_usrn'
@@ -1262,84 +1294,83 @@ def _populate_stage_open_lids(
                         END AS id_2
                     FROM prepared
                     WHERE left_present AND right_present
-                )
-                INSERT INTO stage.open_lids_pair (
-                    build_run_id,
-                    id_1,
-                    id_2,
-                    relation_type,
-                    ingest_run_id
+                ),
+                ins_toid AS (
+                    INSERT INTO stage.open_lids_toid_usrn (
+                        build_run_id,
+                        toid,
+                        usrn,
+                        ingest_run_id
+                    )
+                    SELECT
+                        %s,
+                        resolved.id_1,
+                        resolved.id_2::bigint,
+                        %s
+                    FROM resolved
+                    WHERE resolved.relation_type = 'toid_usrn'
+                      AND resolved.id_2 ~ '^[0-9]+$'
+                    ON CONFLICT (build_run_id, toid, usrn)
+                    DO NOTHING
+                    RETURNING 1
+                ),
+                ins_uprn AS (
+                    INSERT INTO stage.open_lids_uprn_usrn (
+                        build_run_id,
+                        uprn,
+                        usrn,
+                        ingest_run_id
+                    )
+                    SELECT
+                        %s,
+                        resolved.id_1::bigint,
+                        resolved.id_2::bigint,
+                        %s
+                    FROM resolved
+                    WHERE resolved.relation_type = 'uprn_usrn'
+                      AND resolved.id_1 ~ '^[0-9]+$'
+                      AND resolved.id_2 ~ '^[0-9]+$'
+                    ON CONFLICT (build_run_id, uprn, usrn)
+                    DO NOTHING
+                    RETURNING 1
                 )
                 SELECT
-                    %s,
-                    resolved.id_1,
-                    resolved.id_2,
-                    resolved.relation_type,
-                    %s
-                FROM resolved
-                WHERE resolved.relation_type IS NOT NULL
-                ON CONFLICT (build_run_id, id_1, id_2, relation_type)
-                DO NOTHING
+                    (SELECT COUNT(*)::bigint FROM ins_toid) AS toid_count,
+                    (SELECT COUNT(*)::bigint FROM ins_uprn) AS uprn_count,
+                    (
+                        SELECT COUNT(*)::bigint
+                        FROM resolved
+                        WHERE
+                            (
+                                resolved.relation_type = 'toid_usrn'
+                                AND resolved.id_2 ~ '^[0-9]+$'
+                            )
+                            OR (
+                                resolved.relation_type = 'uprn_usrn'
+                                AND resolved.id_1 ~ '^[0-9]+$'
+                                AND resolved.id_2 ~ '^[0-9]+$'
+                            )
+                    ) AS relation_count
                 """
             ).format(
                 id_1_expr=id_1_expr,
                 id_2_expr=id_2_expr,
                 relation_expr=relation_expr,
             ),
-            (ingest_run_id, build_run_id, ingest_run_id),
-        )
-        pair_count = int(cur.rowcount)
-
-        cur.execute(
-            """
-            INSERT INTO stage.open_lids_toid_usrn (
+            (
+                ingest_run_id,
                 build_run_id,
-                toid,
-                usrn,
-                ingest_run_id
-            )
-            SELECT
-                %s,
-                p.id_1,
-                p.id_2::bigint,
-                %s
-            FROM stage.open_lids_pair AS p
-            WHERE p.build_run_id = %s
-              AND p.ingest_run_id = %s
-              AND p.relation_type = 'toid_usrn'
-              AND p.id_2 ~ '^[0-9]+$'
-            ON CONFLICT (build_run_id, toid, usrn)
-            DO NOTHING
-            """,
-            (build_run_id, ingest_run_id, build_run_id, ingest_run_id),
-        )
-        toid_count = int(cur.rowcount)
-
-        cur.execute(
-            """
-            INSERT INTO stage.open_lids_uprn_usrn (
+                ingest_run_id,
                 build_run_id,
-                uprn,
-                usrn,
-                ingest_run_id
-            )
-            SELECT
-                %s,
-                p.id_1::bigint,
-                p.id_2::bigint,
-                %s
-            FROM stage.open_lids_pair AS p
-            WHERE p.build_run_id = %s
-              AND p.ingest_run_id = %s
-              AND p.relation_type = 'uprn_usrn'
-              AND p.id_1 ~ '^[0-9]+$'
-              AND p.id_2 ~ '^[0-9]+$'
-            ON CONFLICT (build_run_id, uprn, usrn)
-            DO NOTHING
-            """,
-            (build_run_id, ingest_run_id, build_run_id, ingest_run_id),
+                ingest_run_id,
+            ),
         )
-        uprn_count = int(cur.rowcount)
+        row = cur.fetchone()
+        if row is None:
+            return 0, 0, 0
+        toid_count = int(row[0])
+        uprn_count = int(row[1])
+        pair_count = int(row[2])
 
     return toid_count, uprn_count, pair_count
 
@@ -1660,7 +1691,7 @@ def _pass_0b_stage_normalisation(
         )
         counts["stage.open_lids_toid_usrn"] = toid_count
         counts["stage.open_lids_uprn_usrn"] = uprn_count
-        counts["stage.open_lids_pair"] = relation_count
+        counts["stage.open_lids_relation_count"] = relation_count
 
     if "nsul" in source_runs:
         field_map, required_fields = _mapped_fields_for_source(schema_config, "nsul")

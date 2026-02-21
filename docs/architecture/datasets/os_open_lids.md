@@ -7,15 +7,15 @@ LIDS is the identifier bridge dataset. It resolves relationships between TOID/UP
 - Source key: `os_open_lids`
 - Raw table: `raw.os_open_lids_row`
 - Stage tables:
-  - `stage.open_lids_pair` (`id_1`, `id_2`, `relation_type`)
   - `stage.open_lids_toid_usrn`
   - `stage.open_lids_uprn_usrn`
+- Stage checkpoint metric:
+  - `stage.open_lids_relation_count`
 
 ## Stage Normalisation
-- Generic identifier pairs are normalised first:
-  - `id_1`, `id_2`, `relation_type`
+- Generic identifier pairs are normalised in-query (`id_1`, `id_2`, `relation_type`) and not persisted as a large intermediate table.
 - Relation typing is explicit (`toid_usrn` or `uprn_usrn`) after deterministic inference.
-- Typed rows are materialised into dedicated stage tables for downstream joins.
+- Typed rows are materialised directly into dedicated stage tables for downstream joins.
 
 ## Downstream Transformations
 - Pass 2: helps infer missing canonical USRN names from Open Names TOIDs.

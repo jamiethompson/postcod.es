@@ -35,6 +35,7 @@ Published dataset pointer log.
 - `raw.*` holds immutable source snapshots for the active build cache.
 - `raw.*` tables are `UNLOGGED` for ingest speed and are rebuildable from archived source files + `meta.ingest_run_file`.
 - `stage.*` holds typed, normalised rows that build passes consume.
+- `stage.*` is treated as transient workspace and is truncated at Pass `0b` start.
 
 ## Core Layer
 
