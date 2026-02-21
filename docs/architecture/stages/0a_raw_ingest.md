@@ -13,6 +13,7 @@ Validate bundle sources exist and have non-zero ingest metadata row counts befor
 ## Value Added
 - fast fail for missing/empty source runs
 - deterministic baseline counts for observability
+- explicit replay contract: raw snapshots are rebuild caches backed by archived source files + file hashes
 
 ## Related
 - Bundle contract: [`../../spec/pipeline_v3/data_model.md`](../../spec/pipeline_v3/data_model.md)

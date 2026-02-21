@@ -25,6 +25,7 @@ Transform raw payloads into typed/stable stage contracts consumed by later passe
 - explicit relation typing for LIDS (`toid_usrn`, `uprn_usrn`)
 - `(ingest_run_id, source_row_num)` indexes support deterministic replay/debug and source-row traceability
 - `stage.*` tables are `UNLOGGED` to reduce write amplification; they are rebuildable from `raw.*`
+- `raw.*` tables are `UNLOGGED` in this development profile; authoritative replay comes from archived source files + `meta.ingest_run_file`
 
 ## Value Added
 - converts heterogeneous schemas into deterministic internal contracts

@@ -32,7 +32,8 @@ Published dataset pointer log.
 
 ## Raw and Stage Layers
 
-- `raw.*` holds immutable source snapshots.
+- `raw.*` holds immutable source snapshots for the active build cache.
+- `raw.*` tables are `UNLOGGED` for ingest speed and are rebuildable from archived source files + `meta.ingest_run_file`.
 - `stage.*` holds typed, normalised rows that build passes consume.
 
 ## Core Layer
