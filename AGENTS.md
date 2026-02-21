@@ -247,6 +247,11 @@ Avoid vague language such as:
 
 Be precise.
 
+### 7.1 Commit Standards
+- Commit at logical checkpoints whenever it makes sense.
+- Prefer atomic commits grouped by concern (schema, ingest, transforms, tests, docs).
+- Use **Conventional Commits** format for every commit message (`type(scope): summary`).
+
 ---
 
 ## 8. Decision Rule
