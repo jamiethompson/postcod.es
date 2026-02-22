@@ -18,6 +18,9 @@ PH1-ID-001
 - Added frozen vocabulary requirements:
   - `ADJECTIVES_64`
   - `BUNDLE_NOUNS_256`
+- Tightened validation:
+  - Bundle generator now fails fast on empty/whitespace release ID components.
+  - Bundle generator requires timezone-aware `created_at` and normalises to UTC.
 
 ## Why it changed
 
@@ -35,6 +38,8 @@ Operators need IDs that can be read at a glance while preserving deterministic t
 - Ingest run IDs are UUIDv4.
 - Build run IDs are UUIDv4.
 - `bundle_id` derives from explicit deterministic inputs plus explicit timestamp.
+- Empty/whitespace release ID components are rejected.
+- Naive timestamps are rejected for bundle ID generation.
 
 ## Observed or expected metric impact
 
@@ -46,6 +51,7 @@ Operators need IDs that can be read at a glance while preserving deterministic t
 - `bundle_id` output is deterministic for a given `(seed, timestamp)` pair.
 - Ingest/build run identifiers are intentionally non-deterministic UUIDs.
 - Bundle ID generators must not create implicit timestamps internally.
+- UTC normalisation ensures timezone-representation style does not change bundle output for the same instant.
 
 ## `spec.md` updated
 

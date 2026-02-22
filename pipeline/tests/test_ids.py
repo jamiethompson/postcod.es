@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from util.id_words import ADJECTIVES_64, BUNDLE_NOUNS_256
 from util.ids import generate_build_run_id, generate_bundle_id, generate_ingest_run_id
@@ -13,7 +13,7 @@ def test_bundle_lexicon_sizes() -> None:
 
 
 def test_bundle_id_is_deterministic_and_pg_safe() -> None:
-    created_at = datetime(2026, 2, 21, 8, 45, 0)
+    created_at = datetime(2026, 2, 21, 8, 45, 0, tzinfo=timezone.utc)
 
     bundle_id_1 = generate_bundle_id(
         "onsud-2026q1",
@@ -31,6 +31,58 @@ def test_bundle_id_is_deterministic_and_pg_safe() -> None:
     assert bundle_id_1 == bundle_id_2
     assert len(bundle_id_1) <= 63
     assert re.fullmatch(r"v\d{6}_[a-z0-9_]+_[a-z0-9_]+_[a-f0-9]{6}", bundle_id_1)
+
+
+def test_bundle_id_rejects_empty_release_components() -> None:
+    created_at = datetime(2026, 2, 21, 8, 45, 0, tzinfo=timezone.utc)
+
+    for onsud_release_id, open_uprn_release_id, open_roads_release_id in [
+        ("", "open-uprn-2026q1", "open-roads-2026q1"),
+        ("onsud-2026q1", "   ", "open-roads-2026q1"),
+        ("onsud-2026q1", "open-uprn-2026q1", "\t"),
+    ]:
+        try:
+            generate_bundle_id(
+                onsud_release_id,
+                open_uprn_release_id,
+                open_roads_release_id,
+                created_at=created_at,
+            )
+            assert False, "Expected ValueError for empty/whitespace release id component"
+        except ValueError:
+            pass
+
+
+def test_bundle_id_rejects_naive_created_at() -> None:
+    try:
+        generate_bundle_id(
+            "onsud-2026q1",
+            "open-uprn-2026q1",
+            "open-roads-2026q1",
+            created_at=datetime(2026, 2, 21, 8, 45, 0),
+        )
+        assert False, "Expected ValueError for naive created_at"
+    except ValueError:
+        pass
+
+
+def test_bundle_id_normalizes_same_instant_across_timezones() -> None:
+    plus_two = timezone(timedelta(hours=2))
+
+    bundle_id_utc = generate_bundle_id(
+        "onsud-2026q1",
+        "open-uprn-2026q1",
+        "open-roads-2026q1",
+        created_at=datetime(2026, 2, 21, 8, 45, 0, tzinfo=timezone.utc),
+    )
+    bundle_id_offset = generate_bundle_id(
+        "onsud-2026q1",
+        "open-uprn-2026q1",
+        "open-roads-2026q1",
+        created_at=datetime(2026, 2, 21, 10, 45, 0, tzinfo=plus_two),
+    )
+
+    assert bundle_id_utc == bundle_id_offset
 
 
 def test_ingest_and_build_run_ids_are_uuids() -> None:

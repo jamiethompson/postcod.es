@@ -13,9 +13,15 @@ from .id_words import ADJECTIVES_64, BUNDLE_NOUNS_256
 _CLEAN_RE: Final[re.Pattern[str]] = re.compile(r"[^a-z0-9_]")
 
 
-def _to_utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value
+def _require_non_empty(value: str, *, field_name: str) -> str:
+    if value is None or value.strip() == "":
+        raise ValueError(f"{field_name} must be non-empty and non-whitespace")
+    return value
+
+
+def _to_utc_naive(value: datetime, *, field_name: str) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError(f"{field_name} must be timezone-aware")
     return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 
@@ -52,9 +58,14 @@ def generate_bundle_id(
         v<yyyymm>_<adjective>_<bundle_noun>_<hash6>
     """
 
-    seed = f"{onsud_release_id}|{open_uprn_release_id}|{open_roads_release_id}"
+    onsud = _require_non_empty(onsud_release_id, field_name="onsud_release_id")
+    open_uprn = _require_non_empty(open_uprn_release_id, field_name="open_uprn_release_id")
+    open_roads = _require_non_empty(open_roads_release_id, field_name="open_roads_release_id")
+    created_at_utc = _to_utc_naive(created_at, field_name="created_at")
+
+    seed = f"{onsud}|{open_uprn}|{open_roads}"
     adjective, noun, hash6 = _hash_parts(seed, BUNDLE_NOUNS_256)
-    yyyymm = _to_utc(created_at).strftime("%Y%m")
+    yyyymm = created_at_utc.strftime("%Y%m")
     identifier = f"v{yyyymm}_{adjective}_{noun}_{hash6}"
 
     # PostgreSQL identifier max length is 63 bytes.

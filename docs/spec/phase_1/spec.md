@@ -196,7 +196,7 @@ The pipeline uses a human-readable deterministic `bundle_id`.
 
 Inputs:
 - `seed` (text): `"{onsud_release_id}|{open_uprn_release_id}|{open_roads_release_id}"`
-- `created_at` (timestamp): supplied by caller
+- `created_at` (timezone-aware timestamp): supplied by caller
 
 Steps:
 1. `digest = sha256(seed).digest()`
@@ -204,8 +204,9 @@ Steps:
 3. `adjective = ADJECTIVES_64[digest[0] % 64]`
 4. `noun = BUNDLE_NOUNS_256[digest[1]]`
 5. `hash6 = digest_hex[:6]`
-6. `yyyymm = created_at.strftime("%Y%m")`
-7. Build: `v<yyyymm>_<adjective>_<bundle_noun>_<hash6>`
+6. Convert `created_at` to UTC.
+7. `yyyymm = created_at_utc.strftime("%Y%m")`
+8. Build: `v<yyyymm>_<adjective>_<bundle_noun>_<hash6>`
 
 Format:
 - `v<yyyymm>_<adjective>_<bundle_noun>_<hash6>`
@@ -213,6 +214,8 @@ Format:
 Rules:
 - Max 63 chars (PostgreSQL-safe identifier)
 - Bundle noun list must be `BUNDLE_NOUNS_256` (rocks/minerals domain)
+- `onsud_release_id`, `open_uprn_release_id`, and `open_roads_release_id` must be non-empty and non-whitespace.
+- `created_at` must be timezone-aware; naive timestamps are invalid.
 
 Example:
 - `v202602_beefy_granite_a91f3b`
