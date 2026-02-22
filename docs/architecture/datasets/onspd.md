@@ -15,7 +15,11 @@ ONSPD is the definitive postcode backbone. It validates postcode existence and c
   - `postcode_norm`, `postcode_display`
   - `status`, `lat`, `lon`, `easting`, `northing`
   - `country_iso2`, `country_iso3`, `subdivision_code`
+  - `post_town`, `locality` (when present in source payload)
   - `street_enrichment_available`
+- Limitations:
+  - `post_town` and `locality` are passthrough attributes only.
+  - If a source release omits these fields, `stage.onspd_postcode` and downstream outputs retain `NULL`.
 
 ## Downstream Transformations
 - Pass 1 writes:

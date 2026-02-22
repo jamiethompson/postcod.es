@@ -897,10 +897,8 @@ def _populate_stage_onspd(
             easting = None
             northing = None
 
-        post_town_key = field_map.get("post_town")
-        locality_key = field_map.get("locality")
-        post_town_raw = row.get(post_town_key) if post_town_key else None
-        locality_raw = row.get(locality_key) if locality_key else None
+        post_town_raw = _field_value(row, field_map, "post_town")
+        locality_raw = _field_value(row, field_map, "locality")
 
         payload.append(
             (
