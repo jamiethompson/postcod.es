@@ -7,7 +7,7 @@ import json
 import re
 import uuid
 from dataclasses import dataclass
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -691,6 +691,18 @@ STAGE_TABLES = (
 )
 
 
+def _analyze_relations(conn: psycopg.Connection, relations: tuple[str, ...]) -> None:
+    with conn.cursor() as cur:
+        for relation in relations:
+            schema_name, table_name = relation.split(".", 1)
+            cur.execute(
+                sql.SQL("ANALYZE {}.{}").format(
+                    sql.Identifier(schema_name),
+                    sql.Identifier(table_name),
+                )
+            )
+
+
 def _assert_no_other_started_build(conn: psycopg.Connection, build_run_id: str) -> None:
     with conn.cursor() as cur:
         cur.execute(
@@ -1208,7 +1220,6 @@ def _populate_stage_open_uprn(
                     d.postcode_norm,
                     %s
                 FROM deduped AS d
-                ORDER BY d.uprn ASC
                 ON CONFLICT (build_run_id, uprn)
                 DO UPDATE SET
                     postcode_norm = EXCLUDED.postcode_norm,
@@ -1431,7 +1442,6 @@ def _populate_stage_nsul(
                     %s
                 FROM normalized AS n
                 WHERE n.postcode_norm IS NOT NULL
-                ORDER BY n.uprn ASC, n.postcode_norm COLLATE "C" ASC
                 ON CONFLICT (build_run_id, uprn, postcode_norm)
                 DO NOTHING
                 """
@@ -1643,6 +1653,11 @@ def _pass_0b_stage_normalisation(
     build_run_id: str,
     source_runs: dict[str, tuple[str, ...]],
 ) -> dict[str, int]:
+    with conn.cursor() as cur:
+        # Pass 0b executes large sort/dedupe operations on raw snapshots.
+        # Raising work_mem here avoids repeated temp-file spill on default settings.
+        cur.execute("SET LOCAL work_mem = '256MB'")
+
     _stage_cleanup(conn, build_run_id)
     schema_config = _schema_config()
 
@@ -1730,6 +1745,7 @@ def _pass_0b_stage_normalisation(
             )
         counts["stage.ppd_parsed_address"] = ppd_rows
 
+    _analyze_relations(conn, STAGE_TABLES)
     return counts
 
 
@@ -1835,6 +1851,8 @@ def _pass_1_onspd_backbone(conn: psycopg.Connection, build_run_id: str) -> dict[
         )
         inserted_meta = cur.rowcount
 
+    _analyze_relations(conn, ("core.postcodes", "core.postcodes_meta"))
+
     return {
         "core.postcodes": int(inserted_postcodes),
         "core.postcodes_meta": int(inserted_meta),
@@ -1845,33 +1863,85 @@ def _pass_2_gb_canonical_streets(conn: psycopg.Connection, build_run_id: str) ->
     with conn.cursor() as cur:
         cur.execute(
             """
-            WITH direct_usrn AS (
-                SELECT
+            INSERT INTO core.streets_usrn (
+                produced_build_run_id,
+                usrn,
+                street_name,
+                street_name_casefolded,
+                street_class,
+                street_status,
+                usrn_run_id
+            )
+            SELECT
+                %(build_run_id)s,
+                s.usrn,
+                s.street_name,
+                s.street_name_casefolded,
+                s.street_class,
+                s.street_status,
+                s.usrn_run_id
+            FROM stage.streets_usrn_input AS s
+            WHERE s.build_run_id = %(build_run_id)s
+            ORDER BY s.usrn ASC
+            """,
+            {"build_run_id": build_run_id},
+        )
+        inserted_direct = int(cur.rowcount)
+
+        cur.execute(
+            """
+            CREATE TEMP TABLE tmp_open_names_toid_counts
+            ON COMMIT DROP AS
+            SELECT
+                n.toid,
+                n.street_name_raw AS street_name,
+                n.street_name_casefolded,
+                COUNT(*)::bigint AS feature_count
+            FROM stage.open_names_road_feature AS n
+            WHERE n.build_run_id = %(build_run_id)s
+              AND n.toid IS NOT NULL
+            GROUP BY n.toid, n.street_name_raw, n.street_name_casefolded
+            """,
+            {"build_run_id": build_run_id},
+        )
+        cur.execute(
+            """
+            CREATE INDEX idx_tmp_open_names_toid_counts_toid
+                ON tmp_open_names_toid_counts (toid)
+            """
+        )
+        cur.execute(
+            """
+            CREATE TEMP TABLE tmp_inferred_name_counts
+            ON COMMIT DROP AS
+            SELECT
+                lids.usrn,
+                n.street_name,
+                n.street_name_casefolded,
+                SUM(n.feature_count)::bigint AS evidence_count,
+                (ARRAY_AGG(lids.ingest_run_id ORDER BY lids.ingest_run_id::text ASC))[1] AS usrn_run_id
+            FROM tmp_open_names_toid_counts AS n
+            JOIN stage.open_lids_toid_usrn AS lids
+              ON lids.build_run_id = %(build_run_id)s
+             AND lids.toid = n.toid
+            GROUP BY lids.usrn, n.street_name, n.street_name_casefolded
+            """,
+            {"build_run_id": build_run_id},
+        )
+        cur.execute(
+            """
+            CREATE INDEX idx_tmp_inferred_name_counts_usrn
+                ON tmp_inferred_name_counts (
                     usrn,
-                    street_name,
+                    evidence_count DESC,
                     street_name_casefolded,
-                    street_class,
-                    street_status,
-                    usrn_run_id
-                FROM stage.streets_usrn_input
-                WHERE build_run_id = %(build_run_id)s
-            ),
-            inferred_name_counts AS (
-                SELECT
-                    lids.usrn,
-                    n.street_name_raw AS street_name,
-                    n.street_name_casefolded,
-                    COUNT(*)::bigint AS evidence_count,
-                    (ARRAY_AGG(lids.ingest_run_id ORDER BY lids.ingest_run_id::text ASC))[1] AS usrn_run_id
-                FROM stage.open_names_road_feature AS n
-                JOIN stage.open_lids_toid_usrn AS lids
-                  ON lids.build_run_id = n.build_run_id
-                 AND lids.toid = n.toid
-                WHERE n.build_run_id = %(build_run_id)s
-                  AND n.toid IS NOT NULL
-                GROUP BY lids.usrn, n.street_name_raw, n.street_name_casefolded
-            ),
-            inferred_usrn AS (
+                    street_name
+                )
+            """
+        )
+        cur.execute(
+            """
+            WITH inferred_usrn AS (
                 SELECT
                     usrn,
                     street_name,
@@ -1891,33 +1961,9 @@ def _pass_2_gb_canonical_streets(conn: psycopg.Connection, build_run_id: str) ->
                                      street_name_casefolded COLLATE "C" ASC,
                                      street_name COLLATE "C" ASC
                         ) AS rn
-                    FROM inferred_name_counts
+                    FROM tmp_inferred_name_counts
                 ) AS ranked
                 WHERE rn = 1
-            ),
-            combined AS (
-                SELECT
-                    usrn,
-                    street_name,
-                    street_name_casefolded,
-                    street_class,
-                    street_status,
-                    usrn_run_id
-                FROM direct_usrn
-                UNION ALL
-                SELECT
-                    inferred.usrn,
-                    inferred.street_name,
-                    inferred.street_name_casefolded,
-                    inferred.street_class,
-                    inferred.street_status,
-                    inferred.usrn_run_id
-                FROM inferred_usrn AS inferred
-                WHERE NOT EXISTS (
-                    SELECT 1
-                    FROM direct_usrn AS direct
-                    WHERE direct.usrn = inferred.usrn
-                )
             )
             INSERT INTO core.streets_usrn (
                 produced_build_run_id,
@@ -1930,20 +1976,27 @@ def _pass_2_gb_canonical_streets(conn: psycopg.Connection, build_run_id: str) ->
             )
             SELECT
                 %(build_run_id)s,
-                usrn,
-                street_name,
-                street_name_casefolded,
-                street_class,
-                street_status,
-                usrn_run_id
-            FROM combined
-            ORDER BY usrn ASC
+                inferred.usrn,
+                inferred.street_name,
+                inferred.street_name_casefolded,
+                inferred.street_class,
+                inferred.street_status,
+                inferred.usrn_run_id
+            FROM inferred_usrn AS inferred
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM core.streets_usrn AS direct
+                WHERE direct.produced_build_run_id = %(build_run_id)s
+                  AND direct.usrn = inferred.usrn
+            )
+            ORDER BY inferred.usrn ASC
             """,
             {"build_run_id": build_run_id},
         )
-        inserted = cur.rowcount
+        inserted_inferred = int(cur.rowcount)
 
-    return {"core.streets_usrn": int(inserted)}
+    _analyze_relations(conn, ("core.streets_usrn",))
+    return {"core.streets_usrn": inserted_direct + inserted_inferred}
 
 
 def _pass_3_open_names_candidates(conn: psycopg.Connection, build_run_id: str) -> dict[str, int]:
@@ -2081,14 +2134,35 @@ def _pass_3_open_names_candidates(conn: psycopg.Connection, build_run_id: str) -
 
 def _pass_4_uprn_reinforcement(conn: psycopg.Connection, build_run_id: str) -> dict[str, int]:
     with conn.cursor() as cur:
+        cur.execute("SET LOCAL work_mem = '256MB'")
+        cur.execute(
+            """
+            SELECT bbs.ingest_run_id
+            FROM meta.build_run AS br
+            JOIN meta.build_bundle_source AS bbs
+              ON bbs.bundle_id = br.bundle_id
+            WHERE br.build_run_id = %s
+              AND bbs.source_name = 'os_open_lids'
+            ORDER BY bbs.ingest_run_id::text ASC
+            LIMIT 1
+            """,
+            (build_run_id,),
+        )
+        run_row = cur.fetchone()
+        if run_row is None or run_row[0] is None:
+            raise BuildError(
+                "Pass 4 failed: missing os_open_lids ingest run for build bundle "
+                f"build_run_id={build_run_id}"
+            )
+        open_lids_ingest_run_id = run_row[0]
+
         cur.execute(
             """
             WITH aggregate_pairs AS (
                 SELECT
                     nsul.postcode_norm,
                     lids.usrn,
-                    COUNT(*)::bigint AS uprn_count,
-                    (ARRAY_AGG(lids.ingest_run_id ORDER BY lids.ingest_run_id::text ASC))[1] AS open_lids_ingest_run_id
+                    COUNT(*)::bigint AS uprn_count
                 FROM stage.nsul_uprn_postcode AS nsul
                 JOIN stage.open_lids_uprn_usrn AS lids
                   ON lids.build_run_id = nsul.build_run_id
@@ -2119,18 +2193,28 @@ def _pass_4_uprn_reinforcement(conn: psycopg.Connection, build_run_id: str) -> d
                 'high',
                 'open_lids:uprn_usrn:' || a.uprn_count::text || '_uprns',
                 'os_open_lids',
-                a.open_lids_ingest_run_id,
+                %s,
                 jsonb_build_object('uprn_count', a.uprn_count)
             FROM aggregate_pairs AS a
+            JOIN stage.onspd_postcode AS sp
+              ON sp.build_run_id = %s
+             AND sp.postcode_norm = a.postcode_norm
             JOIN core.postcodes AS p
               ON p.produced_build_run_id = %s
-             AND replace(p.postcode, ' ', '') = a.postcode_norm
+             AND p.postcode = sp.postcode_display
             JOIN core.streets_usrn AS s
               ON s.produced_build_run_id = %s
              AND s.usrn = a.usrn
             ORDER BY p.postcode COLLATE "C" ASC, a.usrn ASC
             """,
-            (build_run_id, build_run_id, build_run_id, build_run_id),
+            (
+                build_run_id,
+                build_run_id,
+                open_lids_ingest_run_id,
+                build_run_id,
+                build_run_id,
+                build_run_id,
+            ),
         )
         inserted = cur.rowcount
 
@@ -2426,16 +2510,6 @@ def _pass_7_ppd_gap_fill(conn: psycopg.Connection, build_run_id: str) -> dict[st
     }
 
 
-def _confidence_from_rank(conf_rank: int) -> str:
-    if conf_rank >= 3:
-        return "high"
-    if conf_rank == 2:
-        return "medium"
-    if conf_rank == 1:
-        return "low"
-    return "none"
-
-
 def _pass_8_finalisation(conn: psycopg.Connection, build_run_id: str, dataset_version: str) -> dict[str, int]:
     weight_map = _weight_config()
 
@@ -2504,6 +2578,27 @@ def _pass_8_finalisation(conn: psycopg.Connection, build_run_id: str, dataset_ve
 
         cur.execute(
             """
+            CREATE INDEX IF NOT EXISTS idx_tmp_weighted_candidates_street
+                ON tmp_weighted_candidates (postcode, canonical_street_name, candidate_id)
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_tmp_weighted_candidates_source
+                ON tmp_weighted_candidates (
+                    postcode,
+                    canonical_street_name,
+                    source_name,
+                    ingest_run_id,
+                    candidate_type
+                )
+            """
+        )
+
+        cur.execute("DROP TABLE IF EXISTS pg_temp.tmp_final_scored")
+        cur.execute(
+            """
+            CREATE TEMP TABLE tmp_final_scored AS
             WITH grouped AS (
                 SELECT
                     postcode,
@@ -2552,8 +2647,13 @@ def _pass_8_finalisation(conn: psycopg.Connection, build_run_id: str, dataset_ve
                 postcode,
                 canonical_street_name,
                 usrn,
-                weighted_score,
-                conf_rank,
+                ROUND(weighted_score::numeric, 4) AS frequency_score,
+                CASE conf_rank
+                    WHEN 3 THEN 'high'
+                    WHEN 2 THEN 'medium'
+                    WHEN 1 THEN 'low'
+                    ELSE 'none'
+                END AS confidence,
                 CASE
                     WHEN rn = 1
                     THEN ROUND((rounded_probability + (1.0000 - rounded_sum))::numeric, 4)
@@ -2564,23 +2664,26 @@ def _pass_8_finalisation(conn: psycopg.Connection, build_run_id: str, dataset_ve
             ORDER BY postcode COLLATE "C" ASC, rn ASC
             """
         )
-        final_rows = cur.fetchall()
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_tmp_final_scored_street
+                ON tmp_final_scored (postcode, canonical_street_name)
+            """
+        )
 
-    inserted_final = 0
-    inserted_final_candidate = 0
-    inserted_final_source = 0
-
-    with conn.cursor() as cur:
-        for postcode, street_name, usrn, weighted_score, conf_rank, probability, _rn in final_rows:
-            frequency_score = Decimal(str(weighted_score)).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
-            probability_decimal = Decimal(str(probability)).quantize(
-                Decimal("0.0001"),
-                rounding=ROUND_HALF_UP,
-            )
-            confidence = _confidence_from_rank(int(conf_rank))
-
-            cur.execute(
-                """
+        cur.execute("DROP TABLE IF EXISTS pg_temp.tmp_final_inserted")
+        cur.execute(
+            """
+            CREATE TEMP TABLE tmp_final_inserted (
+                final_id bigint PRIMARY KEY,
+                postcode text NOT NULL,
+                canonical_street_name text NOT NULL
+            ) ON COMMIT DROP
+            """
+        )
+        cur.execute(
+            """
+            WITH inserted AS (
                 INSERT INTO derived.postcode_streets_final (
                     produced_build_run_id,
                     postcode,
@@ -2589,82 +2692,88 @@ def _pass_8_finalisation(conn: psycopg.Connection, build_run_id: str, dataset_ve
                     confidence,
                     frequency_score,
                     probability
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
-                RETURNING final_id
-                """,
-                (
-                    build_run_id,
-                    postcode,
-                    street_name,
-                    usrn,
-                    confidence,
-                    frequency_score,
-                    probability_decimal,
-                ),
-            )
-            final_id = int(cur.fetchone()[0])
-            inserted_final += 1
-
-            cur.execute(
-                """
-                SELECT candidate_id
-                FROM tmp_weighted_candidates
-                WHERE postcode = %s
-                  AND canonical_street_name = %s
-                ORDER BY candidate_id ASC
-                """,
-                (postcode, street_name),
-            )
-            candidate_ids = [int(row[0]) for row in cur.fetchall()]
-            for rank, candidate_id in enumerate(candidate_ids, start=1):
-                cur.execute(
-                    """
-                    INSERT INTO derived.postcode_streets_final_candidate (
-                        final_id,
-                        candidate_id,
-                        produced_build_run_id,
-                        link_rank
-                    ) VALUES (%s, %s, %s, %s)
-                    """,
-                    (final_id, candidate_id, build_run_id, rank),
                 )
-                inserted_final_candidate += 1
-
-            cur.execute(
-                """
-                SELECT source_name, ingest_run_id, candidate_type, SUM(weight) AS contribution_weight
-                FROM tmp_weighted_candidates
-                WHERE postcode = %s
-                  AND canonical_street_name = %s
-                GROUP BY source_name, ingest_run_id, candidate_type
-                ORDER BY source_name COLLATE "C" ASC, ingest_run_id::text ASC, candidate_type COLLATE "C" ASC
-                """,
-                (postcode, street_name),
+                SELECT
+                    %s,
+                    fs.postcode,
+                    fs.canonical_street_name,
+                    fs.usrn,
+                    fs.confidence,
+                    fs.frequency_score,
+                    fs.final_probability
+                FROM tmp_final_scored AS fs
+                ORDER BY fs.postcode COLLATE "C" ASC, fs.rn ASC
+                RETURNING final_id, postcode, street_name
             )
-            for source_name, ingest_run_id, candidate_type, contribution_weight in cur.fetchall():
-                cur.execute(
-                    """
-                    INSERT INTO derived.postcode_streets_final_source (
-                        final_id,
-                        source_name,
-                        ingest_run_id,
-                        candidate_type,
-                        contribution_weight,
-                        produced_build_run_id
-                    ) VALUES (%s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        final_id,
-                        source_name,
-                        ingest_run_id,
-                        candidate_type,
-                        Decimal(str(contribution_weight)).quantize(
-                            Decimal("0.0001"), rounding=ROUND_HALF_UP
-                        ),
-                        build_run_id,
-                    ),
-                )
-                inserted_final_source += 1
+            INSERT INTO tmp_final_inserted (final_id, postcode, canonical_street_name)
+            SELECT final_id, postcode, street_name
+            FROM inserted
+            """,
+            (build_run_id,),
+        )
+        inserted_final = int(cur.rowcount)
+
+        cur.execute(
+            """
+            INSERT INTO derived.postcode_streets_final_candidate (
+                final_id,
+                candidate_id,
+                produced_build_run_id,
+                link_rank
+            )
+            SELECT
+                fi.final_id,
+                wc.candidate_id,
+                %s,
+                ROW_NUMBER() OVER (
+                    PARTITION BY fi.final_id
+                    ORDER BY wc.candidate_id ASC
+                ) AS link_rank
+            FROM tmp_final_inserted AS fi
+            JOIN tmp_weighted_candidates AS wc
+              ON wc.postcode = fi.postcode
+             AND wc.canonical_street_name = fi.canonical_street_name
+            ORDER BY fi.final_id ASC, wc.candidate_id ASC
+            """,
+            (build_run_id,),
+        )
+        inserted_final_candidate = int(cur.rowcount)
+
+        cur.execute(
+            """
+            INSERT INTO derived.postcode_streets_final_source (
+                final_id,
+                source_name,
+                ingest_run_id,
+                candidate_type,
+                contribution_weight,
+                produced_build_run_id
+            )
+            SELECT
+                fi.final_id,
+                wc.source_name,
+                wc.ingest_run_id,
+                wc.candidate_type,
+                ROUND(SUM(wc.weight)::numeric, 4) AS contribution_weight,
+                %s
+            FROM tmp_final_inserted AS fi
+            JOIN tmp_weighted_candidates AS wc
+              ON wc.postcode = fi.postcode
+             AND wc.canonical_street_name = fi.canonical_street_name
+            GROUP BY
+                fi.final_id,
+                wc.source_name,
+                wc.ingest_run_id,
+                wc.candidate_type
+            ORDER BY
+                fi.final_id ASC,
+                wc.source_name COLLATE "C" ASC,
+                wc.ingest_run_id::text ASC,
+                wc.candidate_type COLLATE "C" ASC
+            """,
+            (build_run_id,),
+        )
+        inserted_final_source = int(cur.rowcount)
 
         cur.execute(
             """

@@ -10,6 +10,10 @@ Build canonical postcode entities from staged ONSPD rows.
 - `core.postcodes`
 - `core.postcodes_meta`
 
+## Execution Notes
+- set-based insert ordered by canonical postcode normalization key
+- post-insert `ANALYZE` keeps downstream join planning stable (Pass 3/4/5)
+
 ## Value Added
 - authoritative postcode backbone
 - unified geographic/admin context for subsequent joins

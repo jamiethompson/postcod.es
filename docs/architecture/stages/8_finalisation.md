@@ -18,6 +18,7 @@ Resolve candidate evidence into final postcode/street outputs and materialized A
 ## Deterministic Probability
 - exact formula normalization by postcode total weight
 - fixed-scale rounding + deterministic residual correction to rank 1 street
+- set-based SQL materialisation for `final`, `final_candidate`, and `final_source` joins (no per-row query loops)
 
 ## Value Added
 - converts evidence graph into stable product outputs

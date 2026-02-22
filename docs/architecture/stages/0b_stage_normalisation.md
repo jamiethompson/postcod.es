@@ -23,9 +23,11 @@ Transform raw payloads into typed/stable stage contracts consumed by later passe
 - required mapped fields validated per source
 - heavy-volume sources (`os_open_uprn`, `os_open_lids`, `nsul`) use set-based SQL transforms
 - explicit relation typing for LIDS (`toid_usrn`, `uprn_usrn`)
+- pass-local `work_mem` is raised for large sort/dedupe transforms to reduce temp-file spill
 - `(ingest_run_id, source_row_num)` indexes support deterministic replay/debug and source-row traceability
 - `stage.*` tables are `UNLOGGED` to reduce write amplification; they are rebuildable from `raw.*`
 - pass start truncates all `stage.*` tables to prevent historical-row/index accumulation across build runs
+- final `ANALYZE` refreshes planner stats for all `stage.*` relations before Pass 1+
 - `raw.*` tables are `UNLOGGED` in this development profile; authoritative replay comes from archived source files + `meta.ingest_run_file`
 
 ## Value Added
