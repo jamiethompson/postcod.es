@@ -195,7 +195,7 @@ The pipeline uses a human-readable deterministic `bundle_id`.
 `bundle_id` values are lowercased and normalised with `re.sub(r"[^a-z0-9_]", "", value)`.
 
 Inputs:
-- `seed` (text): `"{onsud_release_id}|{open_uprn_release_id}|{open_roads_release_id}"`
+- `seed` (text): canonical JSON array encoding of `[onsud_release_id, open_uprn_release_id, open_roads_release_id]`
 - `created_at` (timezone-aware timestamp): supplied by caller
 
 Steps:
@@ -216,6 +216,7 @@ Rules:
 - Bundle noun list must be `BUNDLE_NOUNS_256` (rocks/minerals domain)
 - `onsud_release_id`, `open_uprn_release_id`, and `open_roads_release_id` must be non-empty and non-whitespace.
 - `created_at` must be timezone-aware; naive timestamps are invalid.
+- Seed encoding must be unambiguous and collision-resistant with respect to component boundaries.
 
 Example:
 - `v202602_beefy_granite_a91f3b`

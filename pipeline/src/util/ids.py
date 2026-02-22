@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from datetime import datetime, timezone
 from typing import Final
@@ -19,7 +20,7 @@ def _require_non_empty(value: str, *, field_name: str) -> str:
     return value
 
 
-def _to_utc_naive(value: datetime, *, field_name: str) -> datetime:
+def _to_utc_aware(value: datetime, *, field_name: str) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError(f"{field_name} must be timezone-aware")
     return value.astimezone(timezone.utc).replace(tzinfo=None)
@@ -45,6 +46,15 @@ def _clean_identifier(value: str, *, max_len: int | None = None) -> str:
     return cleaned
 
 
+def _bundle_seed(onsud_release_id: str, open_uprn_release_id: str, open_roads_release_id: str) -> str:
+    # Canonical JSON encoding avoids delimiter-collision ambiguity.
+    return json.dumps(
+        [onsud_release_id, open_uprn_release_id, open_roads_release_id],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
 def generate_bundle_id(
     onsud_release_id: str,
     open_uprn_release_id: str,
@@ -61,9 +71,9 @@ def generate_bundle_id(
     onsud = _require_non_empty(onsud_release_id, field_name="onsud_release_id")
     open_uprn = _require_non_empty(open_uprn_release_id, field_name="open_uprn_release_id")
     open_roads = _require_non_empty(open_roads_release_id, field_name="open_roads_release_id")
-    created_at_utc = _to_utc_naive(created_at, field_name="created_at")
+    created_at_utc = _to_utc_aware(created_at, field_name="created_at")
 
-    seed = f"{onsud}|{open_uprn}|{open_roads}"
+    seed = _bundle_seed(onsud, open_uprn, open_roads)
     adjective, noun, hash6 = _hash_parts(seed, BUNDLE_NOUNS_256)
     yyyymm = created_at_utc.strftime("%Y%m")
     identifier = f"v{yyyymm}_{adjective}_{noun}_{hash6}"

@@ -85,6 +85,25 @@ def test_bundle_id_normalizes_same_instant_across_timezones() -> None:
     assert bundle_id_utc == bundle_id_offset
 
 
+def test_bundle_id_seed_encoding_avoids_delimiter_collisions() -> None:
+    created_at = datetime(2026, 2, 21, 8, 45, 0, tzinfo=timezone.utc)
+
+    bundle_id_a = generate_bundle_id(
+        "a|b",
+        "c",
+        "d",
+        created_at=created_at,
+    )
+    bundle_id_b = generate_bundle_id(
+        "a",
+        "b|c",
+        "d",
+        created_at=created_at,
+    )
+
+    assert bundle_id_a != bundle_id_b
+
+
 def test_ingest_and_build_run_ids_are_uuids() -> None:
     ingest_run_id_1 = generate_ingest_run_id()
     ingest_run_id_2 = generate_ingest_run_id()

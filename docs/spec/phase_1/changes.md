@@ -21,6 +21,7 @@ PH1-ID-001
 - Tightened validation:
   - Bundle generator now fails fast on empty/whitespace release ID components.
   - Bundle generator requires timezone-aware `created_at` and normalises to UTC.
+- Seed construction is now canonical JSON array encoding instead of delimiter-concatenation to prevent boundary ambiguity.
 
 ## Why it changed
 
@@ -40,6 +41,7 @@ Operators need IDs that can be read at a glance while preserving deterministic t
 - `bundle_id` derives from explicit deterministic inputs plus explicit timestamp.
 - Empty/whitespace release ID components are rejected.
 - Naive timestamps are rejected for bundle ID generation.
+- Distinct release-ID tuples that contain delimiter characters cannot collapse to the same seed.
 
 ## Observed or expected metric impact
 
@@ -52,6 +54,7 @@ Operators need IDs that can be read at a glance while preserving deterministic t
 - Ingest/build run identifiers are intentionally non-deterministic UUIDs.
 - Bundle ID generators must not create implicit timestamps internally.
 - UTC normalisation ensures timezone-representation style does not change bundle output for the same instant.
+- Canonical seed encoding preserves one-to-one mapping from component tuple to hash input.
 
 ## `spec.md` updated
 

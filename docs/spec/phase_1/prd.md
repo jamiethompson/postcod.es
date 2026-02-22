@@ -245,6 +245,7 @@ Requirements:
 - `bundle_id` must include a date tag and short hash component.
 - `bundle_id` must include adjective+noun tokens for readability.
 - `bundle_id` uses a frozen noun list.
+- `bundle_id` seed encoding must preserve component boundaries (no delimiter ambiguity).
 - `bundle_id` generation must fail on empty release-id components and naive timestamps.
 - `ingest_run_id` and `build_run_id` remain UUID values.
 
