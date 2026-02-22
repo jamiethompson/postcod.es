@@ -1,0 +1,15 @@
+{
+  "alias_map": {
+    "ST": "STREET",
+    "RD": "ROAD",
+    "AVE": "AVENUE",
+    "DR": "DRIVE",
+    "LN": "LANE",
+    "CL": "CLOSE",
+    "PL": "PLACE",
+    "CT": "COURT",
+    "SQ": "SQUARE",
+    "GDNS": "GARDENS"
+  },
+  "strip_punctuation": ".,'-"
+}

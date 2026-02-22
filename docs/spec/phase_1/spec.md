@@ -1,264 +1,298 @@
 # Implementation Spec
 
-Open Data Street Inference Import Pipeline (MVP)
+Open Data Street Inference Import Pipeline (Phase 1)
 
 Datasets: ONSUD + OS Open UPRN + OS Open Roads
-
-Purpose: Build a reproducible, versioned import and transformation pipeline that produces a UPRN to inferred street mapping using only open datasets.
 
 ## 1. Objectives
 
 Primary objective:
-- Ingest 3 open datasets
-- Normalise and join them
-- Produce a deterministic, rebuildable derived table:
-    - `UPRN -> postcode -> nearest named road -> confidence score`
+- Ingest three open datasets.
+- Build deterministic core and derived tables.
+- Produce: `UPRN -> postcode -> nearest named road -> confidence score`.
 
-Secondary objectives:
-- Full dataset versioning and provenance
-- Deterministic rebuilds
-- Metrics collection for quality auditing
-- No mutation of raw data after ingest
+Quality objectives:
+- Deterministic rebuilds from identical inputs.
+- Full provenance by dataset release identifiers.
+- Programmatic gate checks at every stage.
+- No hidden state and no implicit defaults.
 
-Non-goals:
-- No address enumeration
-- No PAF or AddressBase
-- No PPD or EPC
-- No serving layer
+### 1.1 Change Note
 
-## 2. Technology Stack
+- 2026-02-20: Nearest-road implementation switched from GiST KNN (`<->`) to deterministic `ST_DWithin + ST_Distance` ordering due reproducible PostgreSQL/PostGIS runtime failure (`index returned tuples in wrong order`) on national-scale data.
+- 2026-02-20: Added explicit Phase 1 resume checkpoints (`meta.release_set_stage_checkpoint`) and `pipeline run phase1 --resume` stage restart semantics.
 
-Language:
-- Python 3.11+
+## 2. Scope and Non-goals
 
-Database:
-- PostgreSQL + PostGIS extension
+Phase 1 includes:
+- Dataset ingest and registration.
+- Core table construction.
+- Spatial nearest named road inference.
+- Distance-based confidence scoring.
+- Metrics and canonical hash persistence.
 
-Core libraries:
-- psycopg (database)
-- SQLAlchemy (optional)
-- pandas (CSV handling)
-- geopandas (if needed for geometry)
-- shapely
-- pyproj
-- click or argparse (CLI)
+Phase 1 excludes:
+- PPD, EPC, LLM logic.
+- API/serving layer.
+- Enumeration endpoints.
+- NI data integration.
 
-Notes:
-- Spatial processing must be delegated to PostGIS where possible
-- Avoid loading large geometries into Python memory
+## 3. Operational Model
 
-## 3. Directory Structure
+The workflow is explicit and separated:
+- Ingest commands populate ingest-layer tables only.
+- Build command populates release-schema core/derived tables only.
+- Activate command repoints stable views only.
 
-- `pipeline/`
-    - `pyproject.toml`
-    - `src/`
-        - `cli.py`
-        - `config.py`
-        - `datasets/`
-            - `onsud.py`
-            - `open_uprn.py`
-            - `open_roads.py`
-        - `ingest/`
-            - `raw_load.py`
-        - `transform/`
-            - `build_core.py`
-            - `build_derived.py`
-            - `metrics.py`
-        - `util/`
-            - `normalise.py`
-            - `hashing.py`
-    - `sql/`
-        - `schema.sql`
-        - `indexes.sql`
-- `data/`
-    - `raw/`
-        - `onsud/`
-        - `open_uprn/`
-        - `open_roads/`
+### 3.1 CLI Contract
 
-## 4. Dataset Specifications
-
-## 4.1 ONSUD (ONS UPRN Directory)
-
-Purpose:
-- UPRN to postcode backbone
-
-Required fields:
-- UPRN
-- Postcode (unit level)
-
-Import requirements:
-- Load full dataset
-- Do not filter rows during raw ingest
-- Preserve all original columns
-
-Derived extraction (`core.uprn_postcode`):
-- `uprn` (bigint primary key)
-- `postcode_norm` (text)
-- `onsud_release_id` (text)
-
-## 4.2 OS Open UPRN
-
-Purpose:
-- UPRN to coordinates
-
-Required fields:
-- UPRN
-- Easting
-- Northing
-- Latitude
-- Longitude
-
-Derived extraction (`core.uprn_point`):
-- `uprn` (bigint primary key)
-- `geom` (Point, SRID 4326)
-- `lat`
-- `lon`
-- `easting`
-- `northing`
-- `open_uprn_release_id`
-
-## 4.3 OS Open Roads
-
-Purpose:
-- Named road geometries for nearest-neighbour inference
-
-Required:
-- Geometry (LineString or MultiLineString)
-- Road name field
-
-Derived extraction (`core.road_segment`):
-- `segment_id` (bigserial primary key)
-- `name_display` (text nullable)
-- `name_norm` (text nullable)
-- `geom` (geometry)
-- `open_roads_release_id`
-
-## 5. Versioning and Provenance
-
-Table: `meta.dataset_release`
-
-Fields:
-- `dataset_key` (`onsud|open_uprn|open_roads`)
-- `release_id`
-- `source_url`
-- `sha256`
-- `retrieved_at`
-- `licence`
-- `file_path`
-
-Table: `meta.pipeline_run`
-
-Fields:
-- `run_id` (uuid)
-- `started_at`
-- `finished_at`
-- `status`
-- `release_map` (json)
-- `log_path`
+- `pipeline db migrate`
+- `pipeline ingest onsud --manifest <path>`
+- `pipeline ingest open-uprn --manifest <path>`
+- `pipeline ingest open-roads --manifest <path>`
+- `pipeline release create --onsud-release <id> --open-uprn-release <id> --open-roads-release <id>`
+- `pipeline run phase1 --release-set-id <id> [--resume] [--rebuild]`
+- `pipeline release activate --release-set-id <id> --actor <name>`
 
 Rules:
-- Every derived build references exact `release_id` values
-- Raw data is immutable
-- Rebuilds must be deterministic
+- `pipeline run phase1` never performs ingest work.
+- If release set status is `built` and `--rebuild` is absent, `run phase1` is a no-op.
+- `--resume` continues only incomplete build stages for that release set using persisted stage checkpoints.
+- Without `--resume`, a `created` release set starts as a clean build (drop/recreate release tables, clear checkpoints).
+- `--resume` and `--rebuild` are mutually exclusive.
+- Checkpoints are written after each table build boundary (not only after aggregate phases).
 
-## 6. Normalisation Rules
+## 4. Data Model
+
+## 4.1 `meta` schema
+
+### `meta.dataset_release`
+Required fields include:
+- `dataset_key`, `release_id` (composite key)
+- `source_url`, `licence`, `file_path`
+- `expected_sha256`, `actual_sha256`
+- `retrieved_at`, `manifest_json`
+- `source_row_count`, `loaded_row_count` (CSV datasets)
+- `source_feature_count`, `loaded_feature_count` (Open Roads)
+- `source_layer_name`, `srid_confirmed`
+
+### `meta.pipeline_run`
+Tracks run start/end, status, stage, release set linkage.
+
+### `meta.release_set_stage_checkpoint`
+Persisted build checkpoints for resumable Phase 1 runs:
+- `release_set_id`, `stage_name` (composite key)
+- `run_id`, `completed_at`
+
+Allowed `stage_name` values:
+- `release_tables_created`
+- `core_uprn_postcode_built`
+- `core_uprn_point_built`
+- `core_road_segment_built`
+- `derived_uprn_street_spatial_built`
+- `metrics_stored`
+- `canonical_hashes_stored`
+- `release_marked_built`
+
+### `meta.release_set`
+- `release_set_id`
+- `onsud_release_id`, `open_uprn_release_id`, `open_roads_release_id`
+- `physical_schema`, `status`
+- Hard uniqueness constraint:
+  - `UNIQUE (onsud_release_id, open_uprn_release_id, open_roads_release_id)`
+
+### `meta.release_activation_log`
+Audit record for view promotion actions (`who`, `when`, `from`, `to`).
+
+### `meta.dataset_metrics`
+Metric key-value records linked to `run_id` and `release_set_id`.
+
+### `meta.canonical_hash`
+- `release_set_id`
+- `object_name`
+- `projection` (ordered JSON array of columns)
+- `row_count`
+- `sha256`
+- `computed_at`
+- `run_id`
+
+Primary key:
+- `(release_set_id, object_name, run_id)`
+
+Allowed `object_name` values are locked:
+- `core_uprn_postcode`
+- `core_uprn_point`
+- `core_road_segment`
+- `derived_uprn_street_spatial`
+
+## 4.2 `raw` schema
+
+### `raw.onsud_row`
+- `dataset_key`, `release_id`, `source_row_num`
+- `uprn`, `postcode`
+- `extras_jsonb`
+
+### `raw.open_uprn_row`
+- `dataset_key`, `release_id`, `source_row_num`
+- `uprn`, `latitude`, `longitude`, `easting`, `northing`
+- `extras_jsonb`
+
+## 4.3 `stage` schema
+
+### `stage.open_roads_segment` (locked contract)
+Required columns:
+- `dataset_key text not null` (must be `open_roads`)
+- `release_id text not null`
+- `segment_id bigint not null` (ingest-generated, deterministic within release)
+- `name_display text`
+- `name_norm text`
+- `geom_bng geometry(MultiLineString,27700) not null`
+
+Required constraints:
+- `CHECK (dataset_key = 'open_roads')`
+- `UNIQUE (release_id, segment_id)`
+- `NOT NULL release_id`
+
+Required indexes:
+- btree on `(release_id)`
+- GiST on `geom_bng`
+
+Build linkage rule:
+- `pipeline run phase1` must read only rows where:
+  - `stage.open_roads_segment.release_id = meta.release_set.open_roads_release_id`
+
+## 4.4 Versioned physical schemas and stable views
+
+For each release set, build into `rs_<release_set_id>` tables:
+- `core_uprn_postcode`
+- `core_uprn_point`
+- `core_road_segment`
+- `derived_uprn_street_spatial`
+
+Stable consumer views:
+- `core.uprn_postcode`
+- `core.uprn_point`
+- `core.road_segment`
+- `derived.uprn_street_spatial`
+
+Only `pipeline release activate` may repoint these views.
+
+## 5. Ingest Rules
+
+General ingest rules:
+- Manifest-driven field mapping; no schema guessing.
+- SHA256 mismatch: hard fail.
+- Duplicate `(dataset_key, release_id)` with different hash: hard fail.
+- Duplicate `(dataset_key, release_id)` with same hash: no-op with clear log.
+- Missing required mapped columns: hard fail.
+
+Open Roads ingest rule:
+- `pipeline ingest open-roads` handles loading into `stage.open_roads_segment` and persists source/loaded feature counts.
+
+## 6. Spatial Inference Rules
+
+- Metric spatial ops use BNG only (`SRID 27700`).
+- Distance calculations never use WGS84 geometry.
+- Validity gate validates `geom_bng` specifically.
+
+Nearest-road query contract:
+- Candidate roads are filtered with `ST_DWithin(point, road, radius_m)`.
+- Candidate ordering is `ST_Distance(point, road) ASC, segment_id ASC`.
+- GiST KNN operator (`<->`) is not used in Phase 1 runtime queries.
+
+Deterministic tie-breaking:
+1. Distance ascending.
+2. `segment_id` ascending.
+
+Confidence score bands are fixed:
+- `<=15m => 0.70`
+- `<=30m => 0.55`
+- `<=60m => 0.40`
+- `<=150m => 0.25`
+- `>150m => 0.00`
+
+No named road within radius:
+- `method = 'none_within_radius'`
+- `confidence_score = 0.00`
+
+## 7. Normalisation Rules
 
 `postcode_norm`:
 - Uppercase
 - Remove spaces
 - Remove non-alphanumeric
 
-`street_norm`:
+`name_norm` (Phase 1 minimal and frozen):
 - Uppercase
-- Trim
-- Collapse whitespace
-- Preserve original name in `street_display`
+- Trim leading/trailing whitespace
+- Collapse internal whitespace to single spaces
+- Strip punctuation: `.` `,` `'` `-`
 
-`UPRN`:
-- Cast to bigint after validation
+## 8. Metrics Definitions
 
-## 7. Ingest Workflow
+Set definitions are fixed:
+- `total_uprns_onsud` = count of non-null UPRNs in `raw.onsud_row` for the release
+- `uprns_with_coordinates` = count of distinct UPRNs present in both release core postcode and core point tables
+- `uprns_resolved_named_road` = count of UPRNs in derived table where `method='open_roads_nearest'`
 
-Step 1: Register dataset release
-- Compute SHA256 of archive
-- Insert into `meta.dataset_release`
+Formulas are fixed:
+- `coordinate_coverage_pct = uprns_with_coordinates / total_uprns_onsud * 100`
+- `resolution_pct = uprns_resolved_named_road / uprns_with_coordinates * 100`
 
-Step 2: Load raw table
-- Use `COPY` for CSV
-- Use `ogr2ogr` or PostGIS loader for shapefiles
-- Record row counts
+## 9. Gate Criteria (Programmatic)
 
-Step 3: Build core tables
-- Extract required fields
-- Apply normalisation
-- Create indexes
+Registration gate:
+- dataset release row exists with expected hash values.
 
-Step 4: Validate joins
-- Count UPRNs in ONSUD
-- Count matching UPRNs in Open UPRN
-- Report coverage percentage
+CSV ingest gate:
+- source data-row count (header excluded) equals loaded row count exactly.
 
-## 8. Street Inference Algorithm (Phase 1)
+Open Roads gate:
+- source feature count equals loaded feature count.
+- all `geom_bng` valid.
+- `SRID = 27700`.
 
-Goal:
-- Assign nearest named road to each UPRN
+Loaded feature count query is locked:
 
-Process:
-1. Join `core.uprn_postcode` with `core.uprn_point`
-2. For each UPRN with coordinates:
-    - Use PostGIS KNN operator (`<->`) to find nearest road segment
-    - Filter to segments with non-null `name_display`
-    - Compute `ST_Distance` in metres
-3. Apply search radius threshold (default `150m`)
-4. Assign:
-    - `street_display`
-    - `street_norm`
-    - `distance_m`
-    - `method = 'open_roads_nearest'`
-    - `confidence_score` (distance-based banding)
-5. Insert into `derived.uprn_street_spatial`
+```sql
+SELECT COUNT(*) AS loaded_feature_count
+FROM stage.open_roads_segment
+WHERE release_id = :open_roads_release_id;
+```
 
-Confidence bands:
-- `<= 15m` -> `0.70`
-- `<= 30m` -> `0.55`
-- `<= 60m` -> `0.40`
-- `<= 150m` -> `0.25`
-- `> 150m` -> `0.00`
+For PostgreSQL/psycopg execution, the parameter style may be adapted, but the logical query must be identical.
 
-If no named road within radius:
-- `street_display = NULL`
-- `confidence_score = 0.00`
-- `method = 'none_within_radius'`
+Core gate:
+- core table row counts are non-zero.
+- join coverage is computed and logged.
 
-## 9. Metrics Collection
+Spatial gate:
+- resolution percent and distance P50/P90/P99 logged.
+- no NULL `method` values.
 
-Compute after build:
-- Total UPRNs (ONSUD)
-- UPRNs with coordinates
-- Coordinate coverage percentage
-- UPRNs resolved to named road
-- Resolution percentage
-- Distance percentiles (P50, P90, P99)
+Metrics gate:
+- all mandatory metric keys persisted for the run.
 
-Insert into `meta.dataset_metrics`
+Activation gate:
+- stable views point to new release set after activation.
+- activation log row exists.
 
-## 10. CLI Contract
+## 10. Canonical Hash Rules
 
-- `pipeline ingest onsud --release-id <id> --file <path>`
-- `pipeline ingest open-uprn --release-id <id> --file <path>`
-- `pipeline ingest open-roads --release-id <id> --file <path>`
+- Canonical hash ordering uses stable key ordering only:
+  - `core_uprn_postcode`: `ORDER BY uprn ASC`
+  - `core_uprn_point`: `ORDER BY uprn ASC`
+  - `core_road_segment`: `ORDER BY segment_id ASC`
+  - `derived_uprn_street_spatial`: `ORDER BY uprn ASC`
+- Never rely on text-collation ordering for canonical hash row order.
+- Projection definition used for each hash must be persisted.
 
-- `pipeline build core --onsud <id> --open-uprn <id> --open-roads <id>`
+## 11. Test Requirements
 
-- `pipeline build derived street-spatial --onsud <id> --open-uprn <id> --open-roads <id>`
-
-- `pipeline metrics compute --onsud <id> --open-uprn <id> --open-roads <id>`
-
-## 11. Acceptance Criteria
-
-- Rebuild produces identical row counts and deterministic output
-- 95%+ of UPRNs with coords resolve to some named road (subject to dataset reality)
-- All tables indexed appropriately
-- No raw data mutation after import
-- All outputs traceable to `release_id` values
+Required tests include:
+- Two Open Roads releases in staging do not mix by `release_id`.
+- Duplicate `(release_id, segment_id)` in staging fails.
+- `loaded_feature_count` is sourced from locked stage query and persisted in metadata.
+- Deterministic tie-break fixture for equal-distance roads.
+- Activation rollback safety test for failed transaction.
+- Reproducibility test: same inputs produce same canonical hashes.

@@ -1,0 +1,15 @@
+{
+  "dataset_key": "open_roads",
+  "release_id": "2026-Q1-E2E-P2",
+  "source_url": "https://example.local/open-roads-sample",
+  "licence": "OGL v3.0",
+  "file_path": "/Users/jamie/code/postcod.es/data/source_files/e2e/open_roads_sample.geojson",
+  "expected_sha256": "15a37f6743b873e6bb6bdcb03980cc2e532126d6262344cf0b60b1611c74ba4b",
+  "format": "geojson",
+  "layer_name": "open_roads_sample",
+  "expected_srid": 27700,
+  "column_map": {
+    "source_id": "src_id",
+    "name_display": "road_name"
+  }
+}

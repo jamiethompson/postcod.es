@@ -1,0 +1,94 @@
+{
+  "sources": {
+    "onspd": {
+      "required_fields": [
+        "postcode",
+        "lat",
+        "lon",
+        "easting",
+        "northing",
+        "subdivision_code"
+      ],
+      "field_map": {
+        "postcode": "pcds",
+        "status": "doterm",
+        "lat": "lat",
+        "lon": "long",
+        "easting": "east1m",
+        "northing": "north1m",
+        "country_iso2": "ctry25cd",
+        "country_iso3": "ctry25cd",
+        "subdivision_code": "ctry25cd"
+      }
+    },
+    "os_open_usrn": {
+      "required_fields": ["usrn"],
+      "field_map": {
+        "usrn": "usrn",
+        "street_class": "street_type"
+      }
+    },
+    "os_open_names": {
+      "required_fields": ["feature_id", "street_name"],
+      "field_map": {
+        "feature_id": "ID",
+        "toid": "RELATED_SPATIAL_OBJECT",
+        "street_name": "NAME1",
+        "local_type": "LOCAL_TYPE"
+      }
+    },
+    "os_open_roads": {
+      "required_fields": ["segment_id", "road_name"],
+      "field_map": {
+        "segment_id": "id",
+        "road_id": "road_name_toid",
+        "road_name": "name_1"
+      }
+    },
+    "os_open_uprn": {
+      "required_fields": ["uprn"],
+      "field_map": {
+        "uprn": "UPRN"
+      }
+    },
+    "os_open_lids": {
+      "required_fields": ["id_1", "id_2"],
+      "field_map": {
+        "id_1": "IDENTIFIER_1",
+        "id_2": "IDENTIFIER_2"
+      }
+    },
+    "nsul": {
+      "required_fields": ["uprn", "postcode"],
+      "field_map": {
+        "uprn": "UPRN",
+        "postcode": "PCDS"
+      }
+    },
+    "osni_gazetteer": {
+      "required_fields": ["feature_id", "street_name"],
+      "field_map": {
+        "feature_id": "feature_id",
+        "postcode": "postcode",
+        "street_name": "street_name"
+      }
+    },
+    "dfi_highway": {
+      "required_fields": ["segment_id", "street_name"],
+      "field_map": {
+        "segment_id": "segment_id",
+        "postcode": "postcode",
+        "street_name": "street_name"
+      }
+    },
+    "ppd": {
+      "required_fields": ["row_hash", "postcode", "street", "house_number"],
+      "field_map": {
+        "row_hash": "row_hash",
+        "postcode": "postcode",
+        "street": "street",
+        "house_number": "house_number"
+      }
+    }
+  }
+}

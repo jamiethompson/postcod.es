@@ -1,0 +1,18 @@
+{
+  "source_name": "os_open_uprn",
+  "source_version": "v3_smoke_2026_02_20",
+  "retrieved_at_utc": "2026-02-20T22:19:05Z",
+  "source_url": "local://v3_smoke/os_open_uprn",
+  "processing_git_sha": "ce2b72877a34457e9e02ffcafcd26d02bac92f03",
+  "notes": "Synthetic smoke dataset for V3 ingest/build validation",
+  "files": [
+    {
+      "file_role": "primary",
+      "file_path": "/Users/jamie/code/postcod.es/data/source_files/v3_smoke/os_open_uprn.csv",
+      "sha256": "430ef8e55d638274af125d86b7d1a0502b5f67ce19ee143aa502ca856751f7fb",
+      "size_bytes": 30,
+      "format": "csv",
+      "row_count_expected": 1
+    }
+  ]
+}
