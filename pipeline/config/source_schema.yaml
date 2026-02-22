@@ -18,7 +18,9 @@
         "northing": "north1m",
         "country_iso2": "ctry25cd",
         "country_iso3": "ctry25cd",
-        "subdivision_code": "ctry25cd"
+        "subdivision_code": "ctry25cd",
+        "post_town": "potown",
+        "locality": "locality"
       }
     },
     "os_open_usrn": {

@@ -43,6 +43,13 @@ Published dataset pointer log.
 - `core.postcodes_meta`
 - `core.streets_usrn`
 
+### `core.postcodes` key columns
+
+- canonical postcode identity and geo/admin context:
+  - `postcode`, `status`, `lat`, `lon`, `easting`, `northing`
+  - `country_iso2`, `country_iso3`, `subdivision_code`
+  - `post_town`, `locality` (passthrough when present in staged ONSPD rows)
+
 ## Derived Layer
 
 ### `derived.postcode_street_candidates`
