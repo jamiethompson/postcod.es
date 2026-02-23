@@ -9,10 +9,10 @@
     {
       "file_role": "primary",
       "file_path": "/Users/jamie/code/postcod.es/data/source_files/v3_smoke/os_open_names.csv",
-      "sha256": "f4440114144336b2fbbd6d6955086820616b7a880c620941a79e74b83fb80499",
-      "size_bytes": 81,
+      "sha256": "649dacb78d5b35abac3c02a35f61674d9ac1353bdac83857f79e0291449920f5",
+      "size_bytes": 706,
       "format": "csv",
-      "row_count_expected": 1
+      "row_count_expected": 2
     }
   ]
 }

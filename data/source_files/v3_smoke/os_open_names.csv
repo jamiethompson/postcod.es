@@ -1,0 +1,3 @@
+ID,RELATED_SPATIAL_OBJECT,postcode,NAME1,LOCAL_TYPE,POPULATED_PLACE,POPULATED_PLACE_URI,POPULATED_PLACE_TYPE,DISTRICT_BOROUGH,DISTRICT_BOROUGH_URI,DISTRICT_BOROUGH_TYPE,COUNTY_UNITARY,COUNTY_UNITARY_URI,COUNTY_UNITARY_TYPE,REGION,REGION_URI,COUNTRY,GEOMETRY_X,GEOMETRY_Y
+feature-001,toid-001,SW1A1AA,Downing Street,Road,,,,,,,,,,,,,,
+feature-002,,SW1A1AA,SW1A 1AA,Postcode,London,http://example.org/place/populated-1,http://example.org/def/place#city,Westminster,http://example.org/admin/district-1,http://example.org/def/admin/MetropolitanBorough,Greater London,http://example.org/admin/county-1,http://example.org/def/admin/CeremonialCounty,London,http://example.org/admin/region-1,England,529090,179645
