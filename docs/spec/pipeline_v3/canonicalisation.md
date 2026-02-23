@@ -16,6 +16,15 @@
 5. Collapse internal whitespace.
 6. Apply configured token aliases deterministically.
 
+## Open Names URI/Type Extraction
+
+For postcode place/admin enrichment fields:
+- trim whitespace first; blank becomes null
+- URI identifier fields (`*_toid`) use the last URI path segment
+- type fields use fragment token after `#` when present, otherwise last URI path segment
+- preserve token case from source extraction
+- do not prefix extracted identifiers (no synthetic `osgb` prefix)
+
 ## Null and Empty Handling
 
 - Empty strings map to null.

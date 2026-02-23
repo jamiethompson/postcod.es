@@ -15,16 +15,16 @@ ONSPD is the definitive postcode backbone. It validates postcode existence and c
   - `postcode_norm`, `postcode_display`
   - `status`, `lat`, `lon`, `easting`, `northing`
   - `country_iso2`, `country_iso3`, `subdivision_code`
-  - `post_town`, `locality` (when present in source payload)
   - `street_enrichment_available`
 - Limitations:
-  - `post_town` and `locality` are passthrough attributes only.
-  - If a source release omits these fields, `stage.onspd_postcode` and downstream outputs retain `NULL`.
+  - ONSPD does not provide reliable open-data place/admin enrichment attributes for this product contract.
+  - Postcode place/admin enrichment is sourced from OS Open Names in Pass 1.
 
 ## Downstream Transformations
 - Pass 1 writes:
   - `core.postcodes`
   - `core.postcodes_meta`
+- Pass 1 left-joins Open Names postcode features for place/admin enrichment (`place`, `*_name`, `*_toid`, `*_type`).
 - Used by passes 3/4/5/6/7 for postcode validation and join gating.
 
 ## Value Added
