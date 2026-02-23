@@ -17,6 +17,7 @@ Source-to-ingest-run links for each bundle.
 Bundle rule:
 - most sources have exactly one ingest run per bundle
 - `ppd` may have multiple ingest runs (baseline + yearly/monthly updates)
+- bundle sources must match the selected profile exactly (no extra source names)
 
 ### `meta.build_run`
 Execution record for a bundle build.

@@ -203,6 +203,12 @@ def create_build_bundle(conn: psycopg.Connection, manifest: BuildBundleManifest)
         raise BuildError(
             "Bundle manifest missing required sources: " + ", ".join(missing)
         )
+    unexpected = sorted(set(manifest.source_runs.keys()) - required_sources)
+    if unexpected:
+        raise BuildError(
+            "Bundle manifest has sources outside profile "
+            f"{manifest.build_profile}: {', '.join(unexpected)}"
+        )
 
     with conn.cursor() as cur:
         for source_name in sorted(required_sources):
@@ -307,6 +313,11 @@ def _load_bundle(
     if missing:
         raise BuildError(
             f"Bundle {bundle_id} missing required sources for profile {build_profile}: {', '.join(missing)}"
+        )
+    unexpected = sorted(set(source_runs.keys()) - required)
+    if unexpected:
+        raise BuildError(
+            f"Bundle {bundle_id} has sources outside profile {build_profile}: {', '.join(unexpected)}"
         )
 
     return build_profile, bundle_hash, status, source_runs
@@ -2380,8 +2391,13 @@ def _pass_3_open_names_candidates(conn: psycopg.Connection, build_run_id: str) -
     with conn.cursor() as cur:
         cur.execute(
             """
+            CREATE TEMP TABLE tmp_pass3_promotions
+            ON COMMIT DROP AS
             SELECT
-                parent.candidate_id,
+                ROW_NUMBER() OVER (
+                    ORDER BY parent.candidate_id ASC, lids.usrn ASC
+                )::bigint AS promotion_rank,
+                parent.candidate_id AS parent_candidate_id,
                 parent.postcode,
                 parent.street_name_raw,
                 parent.street_name_canonical,
@@ -2395,66 +2411,70 @@ def _pass_3_open_names_candidates(conn: psycopg.Connection, build_run_id: str) -
             WHERE parent.produced_build_run_id = %s
               AND parent.candidate_type = 'names_postcode_feature'
               AND parent.evidence_json ->> 'toid' IS NOT NULL
-            ORDER BY parent.candidate_id ASC, lids.usrn ASC
             """,
             (build_run_id,),
         )
-        promotion_rows = cur.fetchall()
+        cur.execute("SELECT COUNT(*)::bigint FROM tmp_pass3_promotions")
+        promotions_inserted = int(cur.fetchone()[0])
 
-    with conn.cursor() as cur:
-        for (
-            parent_candidate_id,
-            postcode,
-            street_name_raw,
-            street_name_canonical,
-            toid,
-            usrn,
-            open_lids_run_id,
-        ) in promotion_rows:
+        if promotions_inserted > 0:
             cur.execute(
                 """
-                INSERT INTO derived.postcode_street_candidates (
-                    produced_build_run_id,
-                    postcode,
-                    street_name_raw,
-                    street_name_canonical,
-                    usrn,
-                    candidate_type,
-                    confidence,
-                    evidence_ref,
-                    source_name,
-                    ingest_run_id,
-                    evidence_json
-                ) VALUES (%s, %s, %s, %s, %s, 'open_lids_toid_usrn', 'high', %s, 'os_open_lids', %s, %s)
-                RETURNING candidate_id
-                """,
-                (
-                    build_run_id,
-                    postcode,
-                    street_name_raw,
-                    street_name_canonical,
-                    usrn,
-                    f"open_lids:toid_usrn:{toid}",
-                    open_lids_run_id,
-                    Jsonb({"toid": toid, "usrn": usrn}),
+                WITH inserted AS (
+                    INSERT INTO derived.postcode_street_candidates (
+                        produced_build_run_id,
+                        postcode,
+                        street_name_raw,
+                        street_name_canonical,
+                        usrn,
+                        candidate_type,
+                        confidence,
+                        evidence_ref,
+                        source_name,
+                        ingest_run_id,
+                        evidence_json
+                    )
+                    SELECT
+                        %s,
+                        p.postcode,
+                        p.street_name_raw,
+                        p.street_name_canonical,
+                        p.usrn,
+                        'open_lids_toid_usrn',
+                        'high',
+                        'open_lids:toid_usrn:' || p.toid,
+                        'os_open_lids',
+                        p.ingest_run_id,
+                        jsonb_build_object('toid', p.toid, 'usrn', p.usrn)
+                    FROM tmp_pass3_promotions AS p
+                    ORDER BY p.promotion_rank ASC
+                    RETURNING candidate_id
                 ),
-            )
-            child_candidate_id = int(cur.fetchone()[0])
-            promotions_inserted += 1
-
-            cur.execute(
-                """
+                ranked_inserted AS (
+                    SELECT
+                        candidate_id,
+                        ROW_NUMBER() OVER (ORDER BY candidate_id ASC)::bigint AS promotion_rank
+                    FROM inserted
+                )
                 INSERT INTO derived.postcode_street_candidate_lineage (
                     parent_candidate_id,
                     child_candidate_id,
                     relation_type,
                     produced_build_run_id
-                ) VALUES (%s, %s, 'promotion_toid_usrn', %s)
+                )
+                SELECT
+                    p.parent_candidate_id,
+                    i.candidate_id,
+                    'promotion_toid_usrn',
+                    %s
+                FROM tmp_pass3_promotions AS p
+                JOIN ranked_inserted AS i
+                  ON i.promotion_rank = p.promotion_rank
                 ON CONFLICT DO NOTHING
                 """,
-                (parent_candidate_id, child_candidate_id, build_run_id),
+                (build_run_id, build_run_id),
             )
-            lineage_inserted += cur.rowcount
+            lineage_inserted = int(cur.rowcount)
 
     return {
         "derived.postcode_street_candidates_base": int(base_inserted),
@@ -3307,6 +3327,11 @@ def run_build(
     if missing:
         raise BuildError(
             f"Bundle {bundle_id} missing required sources: {', '.join(missing)}"
+        )
+    unexpected = sorted(set(source_runs.keys()) - required)
+    if unexpected:
+        raise BuildError(
+            f"Bundle {bundle_id} has sources outside profile {build_profile}: {', '.join(unexpected)}"
         )
     for source_name in required:
         run_ids = source_runs.get(source_name, ())

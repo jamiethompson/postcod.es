@@ -61,6 +61,7 @@ Normalisation rules:
   - zero or more yearly/monthly update runs
 - Stage normalisation applies PPD runs in deterministic ingest timestamp order.
 - Non-PPD sources remain single-run-per-source within a bundle.
+- Bundles must not include sources outside the selected build profile.
 - Build profile naming keeps PPD independent from NI:
   - `gb_core`: GB core only
   - `gb_core_ppd`: GB core + PPD
