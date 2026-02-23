@@ -23,6 +23,7 @@ Transform raw payloads into typed/stable stage contracts consumed by later passe
 
 ## Determinism/Validation
 - required mapped fields validated per source
+- required mapped field presence checks run against the full raw ingest run in a single aggregate scan per source (fail-fast on mapping drift without N field-by-field table scans)
 - GB street-source gate examples:
   - `os_open_usrn`: `usrn`
   - `os_open_names`: `feature_id`, `street_name`
