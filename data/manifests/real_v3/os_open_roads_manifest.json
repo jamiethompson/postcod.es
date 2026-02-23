@@ -1,0 +1,18 @@
+{
+  "source_name": "os_open_roads",
+  "source_version": "oproad_gb_202510",
+  "retrieved_at_utc": "2026-02-20T22:41:35Z",
+  "source_url": "https://api.os.uk/downloads/v1/products/OpenRoads/downloads?area=GB&format=GeoPackage&redirect",
+  "processing_git_sha": "ce2b72877a34457e9e02ffcafcd26d02bac92f03",
+  "notes": "Real source ingest manifest generated locally.",
+  "files": [
+    {
+      "file_role": "open_roads_road_link_gpkg",
+      "file_path": "/Users/jamie/code/postcod.es/data/source_files/real/open_roads/Data/oproad_gb.gpkg",
+      "sha256": "25cfcf41ce89d49a1714798b25db93d4100b98ff0b07ec6debd20b602c01cc22",
+      "size_bytes": 2133966848,
+      "format": "gpkg",
+      "layer_name": "road_link"
+    }
+  ]
+}
