@@ -19,7 +19,22 @@ class StageMappingContractTests(unittest.TestCase):
         )
         self.assertEqual(
             set(sources["os_open_names"]["required_fields"]),
-            {"feature_id", "street_name"},
+            {
+                "feature_id",
+                "street_name",
+                "local_type",
+                "populated_place",
+                "populated_place_uri",
+                "populated_place_type",
+                "region",
+                "region_uri",
+                "county_unitary",
+                "county_unitary_uri",
+                "county_unitary_type",
+                "district_borough",
+                "district_borough_uri",
+                "district_borough_type",
+            },
         )
         self.assertEqual(
             set(sources["os_open_roads"]["required_fields"]),
