@@ -24,6 +24,34 @@ Build pass order is fixed:
 9. `7_ppd_gap_fill`
 10. `8_finalisation`
 
+### 2.2 Postcode Place/Admin Enrichment
+
+- `post_town` and `locality` are removed from the V3 postcode contract.
+- Pass `1_onspd_backbone` enriches postcode rows from Open Names postcode features (`LOCAL_TYPE='Postcode'`) joined by canonical postcode key.
+- Deterministic winner rule for duplicate Open Names postcode matches:
+  - choose the lowest `source_row_num` per `postcode_norm`.
+- Missing Open Names matches do not drop postcode rows; enrichment fields remain null.
+- QA metrics track duplicate postcode keys and place coverage counts per build run.
+
+Field mapping contract:
+- `POPULATED_PLACE -> place`
+- `POPULATED_PLACE_TYPE -> place_type` using URI fragment token after `#` (fallback: last URI path segment)
+- `POPULATED_PLACE_URI -> place_toid` using last URI path segment
+- `REGION -> region_name`
+- `REGION_URI -> region_toid` using last URI path segment
+- `COUNTY_UNITARY -> county_unitary_name`
+- `COUNTY_UNITARY_URI -> county_unitary_toid` using last URI path segment
+- `COUNTY_UNITARY_TYPE -> county_unitary_type` using last URI path segment
+- `DISTRICT_BOROUGH -> district_borough_name`
+- `DISTRICT_BOROUGH_URI -> district_borough_toid` using last URI path segment
+- `DISTRICT_BOROUGH_TYPE -> district_borough_type` using last URI path segment
+
+Normalisation rules:
+- trim whitespace; empty string maps to null
+- no synthetic `osgb` prefixing
+- preserve extracted token case
+- preserve source casing for `place`
+
 ### 2.1 PPD Baseline + Updates Rule
 
 - The 4.2GB PPD full baseline is ingested once and retained.

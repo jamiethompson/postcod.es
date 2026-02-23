@@ -20,7 +20,14 @@ from pipeline.config import (
     source_schema_config_path,
 )
 from pipeline.manifest import BUILD_PROFILES, BuildBundleManifest
-from pipeline.util.normalise import postcode_display, postcode_norm, street_casefold
+from pipeline.util.normalise import (
+    postcode_display,
+    postcode_norm,
+    street_casefold,
+    text_or_none,
+    uri_fragment_or_terminal,
+    uri_terminal_segment,
+)
 
 
 class BuildError(RuntimeError):
@@ -509,6 +516,52 @@ def _iter_validated_raw_rows(
                 yield row[0]
 
 
+def _iter_validated_raw_rows_with_rownum(
+    conn: psycopg.Connection,
+    *,
+    source_name: str,
+    raw_table: str,
+    ingest_run_id: str,
+    field_map: dict[str, str],
+    required_fields: tuple[str, ...],
+):
+    schema_name, table_name = raw_table.split(".", 1)
+    cursor_name = f"stage_raw_num_{table_name}_{uuid.uuid4().hex[:8]}"
+    with conn.cursor(name=cursor_name) as cur:
+        cur.itersize = RAW_FETCH_BATCH_SIZE
+        cur.execute(
+            sql.SQL(
+                """
+                SELECT source_row_num, payload_jsonb
+                FROM {}.{}
+                WHERE ingest_run_id = %s
+                ORDER BY source_row_num ASC
+                """
+            ).format(sql.Identifier(schema_name), sql.Identifier(table_name)),
+            (ingest_run_id,),
+        )
+        first = cur.fetchone()
+        if first is None:
+            raise BuildError(f"Raw source is empty for {source_name}; cannot stage-normalise")
+
+        _assert_required_mapped_fields_present(
+            conn=conn,
+            source_name=source_name,
+            raw_table=raw_table,
+            ingest_run_id=ingest_run_id,
+            field_map=field_map,
+            required_fields=required_fields,
+        )
+        yield int(first[0]), first[1]
+
+        while True:
+            chunk = cur.fetchmany(RAW_FETCH_BATCH_SIZE)
+            if not chunk:
+                break
+            for row in chunk:
+                yield int(row[0]), row[1]
+
+
 def _mapped_fields_for_source(schema_config: dict[str, Any], source_name: str) -> tuple[dict[str, str], tuple[str, ...]]:
     sources = schema_config.get("sources")
     if not isinstance(sources, dict):
@@ -703,6 +756,7 @@ STAGE_TABLES = (
     "stage.open_lids_pair",
     "stage.uprn_point",
     "stage.open_roads_segment",
+    "stage.open_names_postcode_feature",
     "stage.open_names_road_feature",
     "stage.streets_usrn_input",
     "stage.onspd_postcode",
@@ -859,11 +913,9 @@ def _populate_stage_onspd(
             country_iso2,
             country_iso3,
             subdivision_code,
-            post_town,
-            locality,
             street_enrichment_available,
             onspd_run_id
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
     )
 
@@ -915,9 +967,6 @@ def _populate_stage_onspd(
             easting = None
             northing = None
 
-        post_town_raw = _field_value(row, field_map, "post_town")
-        locality_raw = _field_value(row, field_map, "locality")
-
         payload.append(
             (
                 build_run_id,
@@ -931,8 +980,6 @@ def _populate_stage_onspd(
                 country_iso2,
                 country_iso3,
                 subdivision_code,
-                str(post_town_raw).strip().upper() if post_town_raw not in (None, "") else None,
-                str(locality_raw).strip().upper() if locality_raw not in (None, "") else None,
                 _country_enrichment_available(country_iso2, subdivision_code),
                 ingest_run_id,
             )
@@ -1022,8 +1069,8 @@ def _populate_stage_open_names(
     ingest_run_id: str,
     field_map: dict[str, str],
     required_fields: tuple[str, ...],
-) -> int:
-    insert_sql = sql.SQL(
+) -> tuple[int, int, int]:
+    road_insert_sql = sql.SQL(
         """
         INSERT INTO stage.open_names_road_feature (
             build_run_id,
@@ -1044,9 +1091,59 @@ def _populate_stage_open_names(
         """
     )
 
-    payload: list[tuple[Any, ...]] = []
-    inserted = 0
-    for row in _iter_validated_raw_rows(
+    postcode_insert_sql = sql.SQL(
+        """
+        INSERT INTO stage.open_names_postcode_feature (
+            build_run_id,
+            source_row_num,
+            feature_id,
+            postcode_norm,
+            postcode_display,
+            populated_place,
+            place_type,
+            place_toid,
+            district_borough,
+            district_borough_type,
+            district_borough_toid,
+            county_unitary,
+            county_unitary_type,
+            county_unitary_toid,
+            region,
+            region_toid,
+            country,
+            geometry_x,
+            geometry_y,
+            ingest_run_id
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (build_run_id, source_row_num)
+        DO UPDATE SET
+            feature_id = EXCLUDED.feature_id,
+            postcode_norm = EXCLUDED.postcode_norm,
+            postcode_display = EXCLUDED.postcode_display,
+            populated_place = EXCLUDED.populated_place,
+            place_type = EXCLUDED.place_type,
+            place_toid = EXCLUDED.place_toid,
+            district_borough = EXCLUDED.district_borough,
+            district_borough_type = EXCLUDED.district_borough_type,
+            district_borough_toid = EXCLUDED.district_borough_toid,
+            county_unitary = EXCLUDED.county_unitary,
+            county_unitary_type = EXCLUDED.county_unitary_type,
+            county_unitary_toid = EXCLUDED.county_unitary_toid,
+            region = EXCLUDED.region,
+            region_toid = EXCLUDED.region_toid,
+            country = EXCLUDED.country,
+            geometry_x = EXCLUDED.geometry_x,
+            geometry_y = EXCLUDED.geometry_y,
+            ingest_run_id = EXCLUDED.ingest_run_id
+        """
+    )
+
+    road_payload: list[tuple[Any, ...]] = []
+    postcode_payload: list[tuple[Any, ...]] = []
+    road_inserted = 0
+    postcode_inserted = 0
+
+    for source_row_num, row in _iter_validated_raw_rows_with_rownum(
         conn,
         source_name="os_open_names",
         raw_table="raw.os_open_names_row",
@@ -1055,38 +1152,125 @@ def _populate_stage_open_names(
         required_fields=required_fields,
     ):
         feature_id_raw = _field_value(row, field_map, "feature_id")
-        street_raw = _field_value(row, field_map, "street_name")
-        postcode_raw = _field_value(row, field_map, "postcode")
-        toid_raw = _field_value(row, field_map, "toid")
-        if feature_id_raw in (None, "") or street_raw in (None, ""):
+        name1_raw = _field_value(row, field_map, "street_name")
+        if feature_id_raw in (None, "") or name1_raw in (None, ""):
             continue
 
         local_type_raw = _field_value(row, field_map, "local_type")
         local_type = str(local_type_raw).strip().lower() if local_type_raw not in (None, "") else ""
+
+        if local_type == "postcode":
+            postcode_d = postcode_display(str(name1_raw))
+            postcode_n = postcode_norm(str(name1_raw))
+            if postcode_d is not None and postcode_n is not None:
+                populated_place_raw = _field_value(row, field_map, "populated_place")
+                populated_place_type_raw = _field_value(row, field_map, "populated_place_type")
+                populated_place_uri_raw = _field_value(row, field_map, "populated_place_uri")
+                district_borough_raw = _field_value(row, field_map, "district_borough")
+                district_borough_type_raw = _field_value(row, field_map, "district_borough_type")
+                district_borough_uri_raw = _field_value(row, field_map, "district_borough_uri")
+                county_unitary_raw = _field_value(row, field_map, "county_unitary")
+                county_unitary_type_raw = _field_value(row, field_map, "county_unitary_type")
+                county_unitary_uri_raw = _field_value(row, field_map, "county_unitary_uri")
+                region_raw = _field_value(row, field_map, "region")
+                region_uri_raw = _field_value(row, field_map, "region_uri")
+                country_raw = _field_value(row, field_map, "country")
+                geometry_x_raw = _field_value(row, field_map, "geometry_x")
+                geometry_y_raw = _field_value(row, field_map, "geometry_y")
+
+                try:
+                    geometry_x = int(float(geometry_x_raw)) if geometry_x_raw not in (None, "") else None
+                except Exception:
+                    geometry_x = None
+                try:
+                    geometry_y = int(float(geometry_y_raw)) if geometry_y_raw not in (None, "") else None
+                except Exception:
+                    geometry_y = None
+
+                postcode_payload.append(
+                    (
+                        build_run_id,
+                        source_row_num,
+                        str(feature_id_raw).strip(),
+                        postcode_n,
+                        postcode_d,
+                        text_or_none(populated_place_raw),
+                        uri_fragment_or_terminal(
+                            str(populated_place_type_raw) if populated_place_type_raw is not None else None
+                        ),
+                        uri_terminal_segment(
+                            str(populated_place_uri_raw) if populated_place_uri_raw is not None else None
+                        ),
+                        text_or_none(district_borough_raw),
+                        uri_terminal_segment(
+                            str(district_borough_type_raw) if district_borough_type_raw is not None else None
+                        ),
+                        uri_terminal_segment(
+                            str(district_borough_uri_raw) if district_borough_uri_raw is not None else None
+                        ),
+                        text_or_none(county_unitary_raw),
+                        uri_terminal_segment(
+                            str(county_unitary_type_raw) if county_unitary_type_raw is not None else None
+                        ),
+                        uri_terminal_segment(
+                            str(county_unitary_uri_raw) if county_unitary_uri_raw is not None else None
+                        ),
+                        text_or_none(region_raw),
+                        uri_terminal_segment(str(region_uri_raw) if region_uri_raw is not None else None),
+                        text_or_none(country_raw),
+                        geometry_x,
+                        geometry_y,
+                        ingest_run_id,
+                    )
+                )
+                if len(postcode_payload) >= STAGE_INSERT_BATCH_SIZE:
+                    postcode_inserted += _flush_stage_batch(conn, postcode_insert_sql, postcode_payload)
+
         if local_type and "road" not in local_type and "transport" not in local_type:
             continue
 
-        folded = street_casefold(str(street_raw))
-        postcode_n = postcode_norm(str(postcode_raw) if postcode_raw is not None else None)
+        folded = street_casefold(str(name1_raw))
         if folded is None:
             continue
 
-        payload.append(
+        postcode_raw = _field_value(row, field_map, "postcode")
+        toid_raw = _field_value(row, field_map, "toid")
+        postcode_n = postcode_norm(str(postcode_raw) if postcode_raw is not None else None)
+
+        road_payload.append(
             (
                 build_run_id,
                 str(feature_id_raw).strip(),
                 str(toid_raw).strip() if toid_raw not in (None, "") else None,
                 postcode_n,
-                str(street_raw).strip(),
+                str(name1_raw).strip(),
                 folded,
                 ingest_run_id,
             )
         )
-        if len(payload) >= STAGE_INSERT_BATCH_SIZE:
-            inserted += _flush_stage_batch(conn, insert_sql, payload)
+        if len(road_payload) >= STAGE_INSERT_BATCH_SIZE:
+            road_inserted += _flush_stage_batch(conn, road_insert_sql, road_payload)
 
-    inserted += _flush_stage_batch(conn, insert_sql, payload)
-    return inserted
+    road_inserted += _flush_stage_batch(conn, road_insert_sql, road_payload)
+    postcode_inserted += _flush_stage_batch(conn, postcode_insert_sql, postcode_payload)
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT COUNT(*)::bigint
+            FROM (
+                SELECT postcode_norm
+                FROM stage.open_names_postcode_feature
+                WHERE build_run_id = %s
+                GROUP BY postcode_norm
+                HAVING COUNT(*) > 1
+            ) AS d
+            """,
+            (build_run_id,),
+        )
+        duplicate_postcode_keys = int(cur.fetchone()[0] or 0)
+
+    return road_inserted, postcode_inserted, duplicate_postcode_keys
 
 
 def _populate_stage_open_roads(
@@ -1692,9 +1876,12 @@ def _pass_0b_stage_normalisation(
     if "os_open_names" in source_runs:
         field_map, required_fields = _mapped_fields_for_source(schema_config, "os_open_names")
         ingest_run_id = _single_source_run(source_runs, "os_open_names")
-        counts["stage.open_names_road_feature"] = _populate_stage_open_names(
+        road_count, postcode_count, duplicate_postcode_keys = _populate_stage_open_names(
             conn, build_run_id, ingest_run_id, field_map, required_fields
         )
+        counts["stage.open_names_road_feature"] = road_count
+        counts["stage.open_names_postcode_feature"] = postcode_count
+        counts["qa.open_names_postcode_duplicate_keys"] = duplicate_postcode_keys
 
     if "os_open_roads" in source_runs:
         field_map, required_fields = _mapped_fields_for_source(schema_config, "os_open_roads")
@@ -1795,6 +1982,45 @@ def _pass_1_onspd_backbone(conn: psycopg.Connection, build_run_id: str) -> dict[
     with conn.cursor() as cur:
         cur.execute(
             """
+            WITH ranked_open_names_postcode AS (
+                SELECT
+                    postcode_norm,
+                    NULLIF(btrim(populated_place), '') AS place,
+                    NULLIF(btrim(place_type), '') AS place_type,
+                    NULLIF(btrim(place_toid), '') AS place_toid,
+                    NULLIF(btrim(region), '') AS region_name,
+                    NULLIF(btrim(region_toid), '') AS region_toid,
+                    NULLIF(btrim(county_unitary), '') AS county_unitary_name,
+                    NULLIF(btrim(county_unitary_toid), '') AS county_unitary_toid,
+                    NULLIF(btrim(county_unitary_type), '') AS county_unitary_type,
+                    NULLIF(btrim(district_borough), '') AS district_borough_name,
+                    NULLIF(btrim(district_borough_toid), '') AS district_borough_toid,
+                    NULLIF(btrim(district_borough_type), '') AS district_borough_type,
+                    source_row_num,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY postcode_norm
+                        ORDER BY source_row_num ASC
+                    ) AS rn
+                FROM stage.open_names_postcode_feature
+                WHERE build_run_id = %s
+            ),
+            selected_open_names_postcode AS (
+                SELECT
+                    postcode_norm,
+                    place,
+                    place_type,
+                    place_toid,
+                    region_name,
+                    region_toid,
+                    county_unitary_name,
+                    county_unitary_toid,
+                    county_unitary_type,
+                    district_borough_name,
+                    district_borough_toid,
+                    district_borough_type
+                FROM ranked_open_names_postcode
+                WHERE rn = 1
+            )
             INSERT INTO core.postcodes (
                 produced_build_run_id,
                 postcode,
@@ -1806,31 +2032,51 @@ def _pass_1_onspd_backbone(conn: psycopg.Connection, build_run_id: str) -> dict[
                 country_iso2,
                 country_iso3,
                 subdivision_code,
-                post_town,
-                locality,
+                place,
+                place_type,
+                place_toid,
+                region_name,
+                region_toid,
+                county_unitary_name,
+                county_unitary_toid,
+                county_unitary_type,
+                district_borough_name,
+                district_borough_toid,
+                district_borough_type,
                 street_enrichment_available,
                 onspd_run_id
             )
             SELECT
-                build_run_id,
-                postcode_display,
-                status,
-                lat,
-                lon,
-                easting,
-                northing,
-                country_iso2,
-                country_iso3,
-                subdivision_code,
-                post_town,
-                locality,
-                street_enrichment_available,
-                onspd_run_id
-            FROM stage.onspd_postcode
-            WHERE build_run_id = %s
-            ORDER BY postcode_norm COLLATE "C" ASC
+                sp.build_run_id,
+                sp.postcode_display,
+                sp.status,
+                sp.lat,
+                sp.lon,
+                sp.easting,
+                sp.northing,
+                sp.country_iso2,
+                sp.country_iso3,
+                sp.subdivision_code,
+                sop.place,
+                sop.place_type,
+                sop.place_toid,
+                sop.region_name,
+                sop.region_toid,
+                sop.county_unitary_name,
+                sop.county_unitary_toid,
+                sop.county_unitary_type,
+                sop.district_borough_name,
+                sop.district_borough_toid,
+                sop.district_borough_type,
+                sp.street_enrichment_available,
+                sp.onspd_run_id
+            FROM stage.onspd_postcode AS sp
+            LEFT JOIN selected_open_names_postcode AS sop
+              ON sop.postcode_norm = sp.postcode_norm
+            WHERE sp.build_run_id = %s
+            ORDER BY sp.postcode_norm COLLATE "C" ASC
             """,
-            (build_run_id,),
+            (build_run_id, build_run_id),
         )
         inserted_postcodes = cur.rowcount
 
@@ -1843,31 +2089,78 @@ def _pass_1_onspd_backbone(conn: psycopg.Connection, build_run_id: str) -> dict[
                 onspd_run_id
             )
             SELECT
-                build_run_id,
-                postcode_display,
+                p.produced_build_run_id,
+                p.postcode,
                 jsonb_build_object(
-                    'postcode_norm', postcode_norm,
-                    'country_iso2', country_iso2,
-                    'country_iso3', country_iso3,
-                    'subdivision_code', subdivision_code,
-                    'post_town', post_town,
-                    'locality', locality,
-                    'status', status
+                    'postcode_norm', sp.postcode_norm,
+                    'country_iso2', sp.country_iso2,
+                    'country_iso3', sp.country_iso3,
+                    'subdivision_code', sp.subdivision_code,
+                    'place', p.place,
+                    'place_type', p.place_type,
+                    'place_toid', p.place_toid,
+                    'region_name', p.region_name,
+                    'region_toid', p.region_toid,
+                    'county_unitary_name', p.county_unitary_name,
+                    'county_unitary_toid', p.county_unitary_toid,
+                    'county_unitary_type', p.county_unitary_type,
+                    'district_borough_name', p.district_borough_name,
+                    'district_borough_toid', p.district_borough_toid,
+                    'district_borough_type', p.district_borough_type,
+                    'status', sp.status
                 ),
-                onspd_run_id
-            FROM stage.onspd_postcode
-            WHERE build_run_id = %s
-            ORDER BY postcode_norm COLLATE "C" ASC
+                p.onspd_run_id
+            FROM core.postcodes AS p
+            JOIN stage.onspd_postcode AS sp
+              ON sp.build_run_id = p.produced_build_run_id
+             AND sp.postcode_display = p.postcode
+            WHERE p.produced_build_run_id = %s
+            ORDER BY sp.postcode_norm COLLATE "C" ASC
             """,
             (build_run_id,),
         )
         inserted_meta = cur.rowcount
+
+        cur.execute(
+            """
+            WITH totals AS (
+                SELECT COUNT(*)::bigint AS postcode_total
+                FROM core.postcodes
+                WHERE produced_build_run_id = %s
+            ),
+            coverage AS (
+                SELECT COUNT(*)::bigint AS place_populated_count
+                FROM core.postcodes
+                WHERE produced_build_run_id = %s
+                  AND place IS NOT NULL
+            ),
+            open_names_stats AS (
+                SELECT
+                    COUNT(*)::bigint AS open_names_postcode_rows,
+                    COUNT(DISTINCT postcode_norm)::bigint AS open_names_postcode_distinct
+                FROM stage.open_names_postcode_feature
+                WHERE build_run_id = %s
+            )
+            SELECT
+                totals.postcode_total,
+                coverage.place_populated_count,
+                open_names_stats.open_names_postcode_rows,
+                open_names_stats.open_names_postcode_distinct
+            FROM totals, coverage, open_names_stats
+            """,
+            (build_run_id, build_run_id, build_run_id),
+        )
+        postcode_total, place_populated_count, open_names_postcode_rows, open_names_postcode_distinct = cur.fetchone()
 
     _analyze_relations(conn, ("core.postcodes", "core.postcodes_meta"))
 
     return {
         "core.postcodes": int(inserted_postcodes),
         "core.postcodes_meta": int(inserted_meta),
+        "qa.open_names_postcode_rows": int(open_names_postcode_rows),
+        "qa.open_names_postcode_distinct": int(open_names_postcode_distinct),
+        "qa.postcode_place_populated_count": int(place_populated_count),
+        "qa.postcode_place_missing_count": int(postcode_total - place_populated_count),
     }
 
 
@@ -2937,8 +3230,17 @@ def _create_api_projection_tables(
                     p.country_iso2,
                     p.country_iso3,
                     p.subdivision_code,
-                    p.post_town,
-                    p.locality,
+                    p.place,
+                    p.place_type,
+                    p.place_toid,
+                    p.region_name,
+                    p.region_toid,
+                    p.county_unitary_name,
+                    p.county_unitary_toid,
+                    p.county_unitary_type,
+                    p.district_borough_name,
+                    p.district_borough_toid,
+                    p.district_borough_type,
                     p.lat,
                     p.lon,
                     p.easting,
@@ -3167,7 +3469,11 @@ def verify_build(conn: psycopg.Connection, build_run_id: str) -> VerifyResult:
             sql.SQL(
                 """
                 SELECT postcode, status, country_iso2, country_iso3, subdivision_code,
-                       post_town, locality, lat, lon, easting, northing,
+                       place, place_type, place_toid,
+                       region_name, region_toid,
+                       county_unitary_name, county_unitary_toid, county_unitary_type,
+                       district_borough_name, district_borough_toid, district_borough_type,
+                       lat, lon, easting, northing,
                        street_enrichment_available, multi_street, streets_json::text,
                        sources::text, dataset_version
                 FROM api.{}

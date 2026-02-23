@@ -11,6 +11,7 @@ Transform raw payloads into typed/stable stage contracts consumed by later passe
 - `stage.onspd_postcode`
 - `stage.streets_usrn_input`
 - `stage.open_names_road_feature`
+- `stage.open_names_postcode_feature`
 - `stage.open_roads_segment`
 - `stage.uprn_point`
 - `stage.open_lids_toid_usrn`
@@ -18,6 +19,7 @@ Transform raw payloads into typed/stable stage contracts consumed by later passe
 - `stage.nsul_uprn_postcode`
 - optional NI/PPD stage tables
 - checkpoint metric: `stage.open_lids_relation_count`
+- checkpoint metric: `qa.open_names_postcode_duplicate_keys`
 
 ## Determinism/Validation
 - required mapped fields validated per source
@@ -25,6 +27,10 @@ Transform raw payloads into typed/stable stage contracts consumed by later passe
   - `os_open_usrn`: `usrn`
   - `os_open_names`: `feature_id`, `street_name`
   - `os_open_roads`: `segment_id`, `road_name`
+- Open Names postcode enrichment extract:
+  - `LOCAL_TYPE='Postcode'` rows stage to `stage.open_names_postcode_feature`
+  - postcode key derives from normalised `NAME1`
+  - deterministic duplicate handling uses `source_row_num` ordering
 - heavy-volume sources (`os_open_uprn`, `os_open_lids`, `nsul`) use set-based SQL transforms
 - explicit relation typing for LIDS (`toid_usrn`, `uprn_usrn`)
 - pass-local `work_mem` is raised for large sort/dedupe transforms to reduce temp-file spill

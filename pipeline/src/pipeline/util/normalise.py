@@ -73,3 +73,28 @@ def street_casefold(value: str | None) -> str | None:
     canonical = " ".join(tokens).strip()
     return canonical or None
 
+
+def text_or_none(value: object | None) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def uri_terminal_segment(value: str | None) -> str | None:
+    text = text_or_none(value)
+    if text is None:
+        return None
+    terminal = text.rstrip("/").split("/")[-1].strip()
+    return terminal or None
+
+
+def uri_fragment_or_terminal(value: str | None) -> str | None:
+    text = text_or_none(value)
+    if text is None:
+        return None
+    if "#" in text:
+        fragment = text.split("#")[-1].strip()
+        if fragment:
+            return fragment
+    return uri_terminal_segment(text)

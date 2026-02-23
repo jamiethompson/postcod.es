@@ -48,7 +48,11 @@ Published dataset pointer log.
 - canonical postcode identity and geo/admin context:
   - `postcode`, `status`, `lat`, `lon`, `easting`, `northing`
   - `country_iso2`, `country_iso3`, `subdivision_code`
-  - `post_town`, `locality` (passthrough when present in staged ONSPD rows)
+  - Open Names place/admin enrichment fields:
+    - `place`, `place_type`, `place_toid`
+    - `region_name`, `region_toid`
+    - `county_unitary_name`, `county_unitary_toid`, `county_unitary_type`
+    - `district_borough_name`, `district_borough_toid`, `district_borough_type`
 
 ## Derived Layer
 

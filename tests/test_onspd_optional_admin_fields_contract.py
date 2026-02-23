@@ -9,18 +9,18 @@ WORKFLOWS = ROOT / "pipeline" / "src" / "pipeline" / "build" / "workflows.py"
 
 
 class OnspdOptionalAdminFieldsContractTests(unittest.TestCase):
-    def test_onspd_field_map_includes_post_town_and_locality(self) -> None:
+    def test_onspd_field_map_omits_post_town_and_locality(self) -> None:
         payload = json.loads(SOURCE_SCHEMA.read_text(encoding="utf-8"))
         field_map = payload["sources"]["onspd"]["field_map"]
-        self.assertIn("post_town", field_map)
-        self.assertIn("locality", field_map)
-        self.assertTrue(str(field_map["post_town"]).strip())
-        self.assertTrue(str(field_map["locality"]).strip())
+        self.assertNotIn("post_town", field_map)
+        self.assertNotIn("locality", field_map)
 
-    def test_stage_loader_resolves_post_town_and_locality_via_field_candidates(self) -> None:
+    def test_stage_loader_no_longer_reads_post_town_or_locality(self) -> None:
         text = WORKFLOWS.read_text(encoding="utf-8")
-        self.assertIn('post_town_raw = _field_value(row, field_map, "post_town")', text)
-        self.assertIn('locality_raw = _field_value(row, field_map, "locality")', text)
+        self.assertNotIn('post_town_raw = _field_value(row, field_map, "post_town")', text)
+        self.assertNotIn('locality_raw = _field_value(row, field_map, "locality")', text)
+        self.assertNotIn("post_town", text)
+        self.assertNotIn("locality", text)
 
 
 if __name__ == "__main__":
