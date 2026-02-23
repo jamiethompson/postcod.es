@@ -18,9 +18,7 @@
         "northing": "north1m",
         "country_iso2": "ctry25cd",
         "country_iso3": "ctry25cd",
-        "subdivision_code": "ctry25cd",
-        "post_town": "potown",
-        "locality": "locality"
+        "subdivision_code": "ctry25cd"
       }
     },
     "os_open_usrn": {
@@ -32,13 +30,42 @@
       }
     },
     "os_open_names": {
-      "required_fields": ["feature_id", "street_name"],
+      "required_fields": [
+        "feature_id",
+        "street_name",
+        "local_type",
+        "populated_place",
+        "populated_place_uri",
+        "populated_place_type",
+        "region",
+        "region_uri",
+        "county_unitary",
+        "county_unitary_uri",
+        "county_unitary_type",
+        "district_borough",
+        "district_borough_uri",
+        "district_borough_type"
+      ],
       "field_map": {
         "feature_id": "ID",
         "toid": "RELATED_SPATIAL_OBJECT",
         "postcode": "postcode",
         "street_name": "NAME1",
-        "local_type": "LOCAL_TYPE"
+        "local_type": "LOCAL_TYPE",
+        "populated_place": "POPULATED_PLACE",
+        "populated_place_uri": "POPULATED_PLACE_URI",
+        "populated_place_type": "POPULATED_PLACE_TYPE",
+        "district_borough": "DISTRICT_BOROUGH",
+        "district_borough_uri": "DISTRICT_BOROUGH_URI",
+        "district_borough_type": "DISTRICT_BOROUGH_TYPE",
+        "county_unitary": "COUNTY_UNITARY",
+        "county_unitary_uri": "COUNTY_UNITARY_URI",
+        "county_unitary_type": "COUNTY_UNITARY_TYPE",
+        "region": "REGION",
+        "region_uri": "REGION_URI",
+        "country": "COUNTRY",
+        "geometry_x": "GEOMETRY_X",
+        "geometry_y": "GEOMETRY_Y"
       }
     },
     "os_open_roads": {
