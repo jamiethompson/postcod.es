@@ -616,24 +616,44 @@ def _assert_required_mapped_fields_present(
     field_map: dict[str, str],
     required_fields: tuple[str, ...],
 ) -> None:
+    if len(required_fields) == 0:
+        return
+
     schema_name, table_name = raw_table.split(".", 1)
-    missing = []
+    candidate_sets: list[tuple[str, ...]] = []
+    select_clauses: list[sql.SQL] = []
+    params: list[Any] = []
+
+    for key in required_fields:
+        candidates = _field_name_candidates(field_map, key)
+        candidate_sets.append(candidates)
+        conditions = sql.SQL(" OR ").join(sql.SQL("payload_jsonb ? %s") for _ in candidates)
+        select_clauses.append(sql.SQL("COALESCE(BOOL_OR({}), FALSE)").format(conditions))
+        params.extend(candidates)
+
     with conn.cursor() as cur:
-        for key in required_fields:
-            candidates = _field_name_candidates(field_map, key)
-            conditions = sql.SQL(" OR ").join(sql.SQL("payload_jsonb ? %s") for _ in candidates)
-            query = sql.SQL(
-                """
-                SELECT 1
-                FROM {}.{}
-                WHERE ingest_run_id = %s
-                  AND ({})
-                LIMIT 1
-                """
-            ).format(sql.Identifier(schema_name), sql.Identifier(table_name), conditions)
-            cur.execute(query, (ingest_run_id, *candidates))
-            if cur.fetchone() is None:
-                missing.append("/".join(candidates))
+        query = sql.SQL(
+            """
+            SELECT {}
+            FROM {}.{}
+            WHERE ingest_run_id = %s
+            """
+        ).format(
+            sql.SQL(", ").join(select_clauses),
+            sql.Identifier(schema_name),
+            sql.Identifier(table_name),
+        )
+        cur.execute(query, (*params, ingest_run_id))
+        row = cur.fetchone()
+
+    if row is None:
+        row = tuple(False for _ in candidate_sets)
+
+    missing = []
+    for index, candidates in enumerate(candidate_sets):
+        if not bool(row[index]):
+            missing.append("/".join(candidates))
+
     if missing:
         raise BuildError(
             f"Schema mapping unresolved for {source_name}; missing mapped fields in raw rows: "
