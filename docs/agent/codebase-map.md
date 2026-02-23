@@ -17,6 +17,7 @@
 ## Manifests and Data Inputs
 - Real manifests: `data/manifests/real_v3/`
 - Smoke manifests: `data/manifests/v3_smoke/`
+- Smoke source fixtures (tracked): `data/source_files/v3_smoke/`
 - Local source files: `data/source_files/`
 
 ## Tests
