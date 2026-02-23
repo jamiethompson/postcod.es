@@ -14,8 +14,10 @@ Open Names contributes named road features and optional TOID references, creatin
   - `feature_id`
   - `toid` (when present)
   - `street_name_raw`, `street_name_casefolded`
-  - `postcode_norm` (when available)
+  - `postcode_norm` (when available in the source release)
 - Road/transport filtering is applied during staging.
+- Required mapping gate:
+  - `source_schema.yaml` must resolve `feature_id` and `street_name`.
 
 ## Downstream Transformations
 - Pass 3 inserts `names_postcode_feature` candidates.

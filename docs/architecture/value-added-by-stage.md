@@ -25,11 +25,11 @@ This page explains what new product value is created at each pass, not just what
   - provides postcode centroid/admin metadata context for all later joins
 
 ## Pass 2: Canonical Streets (USRN)
-- Inputs: `stage.streets_usrn_input`, `stage.open_names_road_feature`, `stage.open_lids_toid_usrn`.
+- Inputs: `stage.streets_usrn_input`, `stage.open_names_road_feature`, `stage.open_roads_segment`, `stage.open_lids_toid_usrn`.
 - Output: `core.streets_usrn`.
 - Value added:
   - produces canonical USRN-keyed street dictionary
-  - fills gaps by inferring USRN names from Open Names + LIDS TOID mapping when direct names are absent
+  - fills gaps by inferring USRN names from Open Names/Open Roads + LIDS TOID mapping when direct names are absent
 
 ## Pass 3: Open Names Candidates
 - Inputs: `stage.open_names_road_feature`, `stage.open_lids_toid_usrn`, `core.*`.

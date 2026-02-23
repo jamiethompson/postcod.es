@@ -27,6 +27,7 @@
       "required_fields": ["usrn"],
       "field_map": {
         "usrn": "usrn",
+        "street_name": "street_name",
         "street_class": "street_type"
       }
     },
@@ -35,6 +36,7 @@
       "field_map": {
         "feature_id": "ID",
         "toid": "RELATED_SPATIAL_OBJECT",
+        "postcode": "postcode",
         "street_name": "NAME1",
         "local_type": "LOCAL_TYPE"
       }
@@ -44,6 +46,7 @@
       "field_map": {
         "segment_id": "id",
         "road_id": "road_name_toid",
+        "postcode": "postcode",
         "road_name": "name_1"
       }
     },

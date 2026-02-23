@@ -15,6 +15,9 @@ OS Open USRN defines canonical street identity (`USRN`) and street naming used a
   - `street_name`
   - `street_name_casefolded`
   - class/status metadata (when available)
+- Required mapping gate:
+  - `source_schema.yaml` must resolve `usrn` before Pass 0b continues.
+  - `street_name` is used when present; missing direct names are recovered in Pass 2 via Open Names + LIDS evidence.
 
 ## Downstream Transformations
 - Pass 2 writes `core.streets_usrn`.

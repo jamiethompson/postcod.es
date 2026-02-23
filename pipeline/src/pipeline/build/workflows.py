@@ -492,8 +492,10 @@ def _iter_validated_raw_rows(
 
         first_row = first[0]
         _assert_required_mapped_fields_present(
+            conn=conn,
             source_name=source_name,
-            sample_row=first_row,
+            raw_table=raw_table,
+            ingest_run_id=ingest_run_id,
             field_map=field_map,
             required_fields=required_fields,
         )
@@ -543,17 +545,31 @@ def _mapped_fields_for_source(schema_config: dict[str, Any], source_name: str) -
 
 
 def _assert_required_mapped_fields_present(
+    conn: psycopg.Connection,
     source_name: str,
-    sample_row: dict[str, Any],
+    raw_table: str,
+    ingest_run_id: str,
     field_map: dict[str, str],
     required_fields: tuple[str, ...],
 ) -> None:
-    sample_keys = set(sample_row.keys())
+    schema_name, table_name = raw_table.split(".", 1)
     missing = []
-    for key in required_fields:
-        candidates = _field_name_candidates(field_map, key)
-        if not any(candidate in sample_keys for candidate in candidates):
-            missing.append("/".join(candidates))
+    with conn.cursor() as cur:
+        for key in required_fields:
+            candidates = _field_name_candidates(field_map, key)
+            conditions = sql.SQL(" OR ").join(sql.SQL("payload_jsonb ? %s") for _ in candidates)
+            query = sql.SQL(
+                """
+                SELECT 1
+                FROM {}.{}
+                WHERE ingest_run_id = %s
+                  AND ({})
+                LIMIT 1
+                """
+            ).format(sql.Identifier(schema_name), sql.Identifier(table_name), conditions)
+            cur.execute(query, (ingest_run_id, *candidates))
+            if cur.fetchone() is None:
+                missing.append("/".join(candidates))
     if missing:
         raise BuildError(
             f"Schema mapping unresolved for {source_name}; missing mapped fields in raw rows: "
@@ -629,8 +645,10 @@ def _validated_raw_sample_row(
 
     sample_row = row[0]
     _assert_required_mapped_fields_present(
+        conn=conn,
         source_name=source_name,
-        sample_row=sample_row,
+        raw_table=raw_table,
+        ingest_run_id=ingest_run_id,
         field_map=field_map,
         required_fields=required_fields,
     )
@@ -956,9 +974,6 @@ def _populate_stage_usrn(
 
     payload: list[tuple[Any, ...]] = []
     inserted = 0
-    street_name_key = field_map.get("street_name")
-    street_class_key = field_map.get("street_class")
-    street_status_key = field_map.get("street_status")
     for row in _iter_validated_raw_rows(
         conn,
         source_name="os_open_usrn",
@@ -968,7 +983,7 @@ def _populate_stage_usrn(
         required_fields=required_fields,
     ):
         usrn_raw = _field_value(row, field_map, "usrn")
-        name_raw = row.get(street_name_key) if street_name_key else None
+        name_raw = _field_value(row, field_map, "street_name")
         if usrn_raw in (None, "") or name_raw in (None, ""):
             continue
         try:
@@ -980,14 +995,17 @@ def _populate_stage_usrn(
         if not street_name or folded is None:
             continue
 
+        street_class_raw = _field_value(row, field_map, "street_class")
+        street_status_raw = _field_value(row, field_map, "street_status")
+
         payload.append(
             (
                 build_run_id,
                 usrn,
                 street_name,
                 folded,
-                str(row.get(street_class_key)).strip() if street_class_key and row.get(street_class_key) not in (None, "") else None,
-                str(row.get(street_status_key)).strip() if street_status_key and row.get(street_status_key) not in (None, "") else None,
+                str(street_class_raw).strip() if street_class_raw not in (None, "") else None,
+                str(street_status_raw).strip() if street_status_raw not in (None, "") else None,
                 ingest_run_id,
             )
         )
@@ -1028,9 +1046,6 @@ def _populate_stage_open_names(
 
     payload: list[tuple[Any, ...]] = []
     inserted = 0
-    toid_key = field_map.get("toid")
-    postcode_key = field_map.get("postcode")
-    local_type_key = field_map.get("local_type")
     for row in _iter_validated_raw_rows(
         conn,
         source_name="os_open_names",
@@ -1041,12 +1056,13 @@ def _populate_stage_open_names(
     ):
         feature_id_raw = _field_value(row, field_map, "feature_id")
         street_raw = _field_value(row, field_map, "street_name")
-        postcode_raw = row.get(postcode_key) if postcode_key else None
-        toid_raw = row.get(toid_key) if toid_key else None
+        postcode_raw = _field_value(row, field_map, "postcode")
+        toid_raw = _field_value(row, field_map, "toid")
         if feature_id_raw in (None, "") or street_raw in (None, ""):
             continue
 
-        local_type = str(row.get(local_type_key)).strip().lower() if local_type_key and row.get(local_type_key) not in (None, "") else ""
+        local_type_raw = _field_value(row, field_map, "local_type")
+        local_type = str(local_type_raw).strip().lower() if local_type_raw not in (None, "") else ""
         if local_type and "road" not in local_type and "transport" not in local_type:
             continue
 
@@ -1105,9 +1121,6 @@ def _populate_stage_open_roads(
 
     payload: list[tuple[Any, ...]] = []
     inserted = 0
-    postcode_key = field_map.get("postcode")
-    usrn_key = field_map.get("usrn")
-    road_id_key = field_map.get("road_id")
     for row in _iter_validated_raw_rows(
         conn,
         source_name="os_open_roads",
@@ -1125,15 +1138,16 @@ def _populate_stage_open_roads(
         if folded is None:
             continue
 
-        postcode_n = postcode_norm(str(row.get(postcode_key)) if postcode_key and row.get(postcode_key) not in (None, "") else None)
+        postcode_raw = _field_value(row, field_map, "postcode")
+        postcode_n = postcode_norm(str(postcode_raw) if postcode_raw not in (None, "") else None)
 
-        usrn_raw = row.get(usrn_key) if usrn_key else None
+        usrn_raw = _field_value(row, field_map, "usrn")
         try:
             usrn = int(usrn_raw) if usrn_raw not in (None, "") else None
         except Exception:
             usrn = None
 
-        road_id_raw = row.get(road_id_key) if road_id_key else None
+        road_id_raw = _field_value(row, field_map, "road_id")
 
         payload.append(
             (
@@ -1888,24 +1902,47 @@ def _pass_2_gb_canonical_streets(conn: psycopg.Connection, build_run_id: str) ->
 
         cur.execute(
             """
-            CREATE TEMP TABLE tmp_open_names_toid_counts
+            CREATE TEMP TABLE tmp_toid_name_counts
             ON COMMIT DROP AS
             SELECT
-                n.toid,
-                n.street_name_raw AS street_name,
-                n.street_name_casefolded,
+                src.toid,
+                src.street_name,
+                src.street_name_casefolded,
+                src.source_priority,
                 COUNT(*)::bigint AS feature_count
-            FROM stage.open_names_road_feature AS n
-            WHERE n.build_run_id = %(build_run_id)s
-              AND n.toid IS NOT NULL
-            GROUP BY n.toid, n.street_name_raw, n.street_name_casefolded
+            FROM (
+                SELECT
+                    n.toid,
+                    n.street_name_raw AS street_name,
+                    n.street_name_casefolded,
+                    1::smallint AS source_priority
+                FROM stage.open_names_road_feature AS n
+                WHERE n.build_run_id = %(build_run_id)s
+                  AND n.toid IS NOT NULL
+
+                UNION ALL
+
+                SELECT
+                    r.road_id AS toid,
+                    r.road_name AS street_name,
+                    r.road_name_casefolded,
+                    2::smallint AS source_priority
+                FROM stage.open_roads_segment AS r
+                WHERE r.build_run_id = %(build_run_id)s
+                  AND r.road_id IS NOT NULL
+            ) AS src
+            GROUP BY
+                src.toid,
+                src.street_name,
+                src.street_name_casefolded,
+                src.source_priority
             """,
             {"build_run_id": build_run_id},
         )
         cur.execute(
             """
-            CREATE INDEX idx_tmp_open_names_toid_counts_toid
-                ON tmp_open_names_toid_counts (toid)
+            CREATE INDEX idx_tmp_toid_name_counts_toid
+                ON tmp_toid_name_counts (toid)
             """
         )
         cur.execute(
@@ -1917,8 +1954,9 @@ def _pass_2_gb_canonical_streets(conn: psycopg.Connection, build_run_id: str) ->
                 n.street_name,
                 n.street_name_casefolded,
                 SUM(n.feature_count)::bigint AS evidence_count,
+                MIN(n.source_priority)::smallint AS source_priority,
                 (ARRAY_AGG(lids.ingest_run_id ORDER BY lids.ingest_run_id::text ASC))[1] AS usrn_run_id
-            FROM tmp_open_names_toid_counts AS n
+            FROM tmp_toid_name_counts AS n
             JOIN stage.open_lids_toid_usrn AS lids
               ON lids.build_run_id = %(build_run_id)s
              AND lids.toid = n.toid
@@ -1932,6 +1970,7 @@ def _pass_2_gb_canonical_streets(conn: psycopg.Connection, build_run_id: str) ->
                 ON tmp_inferred_name_counts (
                     usrn,
                     evidence_count DESC,
+                    source_priority ASC,
                     street_name_casefolded,
                     street_name
                 )
@@ -1956,6 +1995,7 @@ def _pass_2_gb_canonical_streets(conn: psycopg.Connection, build_run_id: str) ->
                         ROW_NUMBER() OVER (
                             PARTITION BY usrn
                             ORDER BY evidence_count DESC,
+                                     source_priority ASC,
                                      street_name_casefolded COLLATE "C" ASC,
                                      street_name COLLATE "C" ASC
                         ) AS rn

@@ -21,6 +21,10 @@ Transform raw payloads into typed/stable stage contracts consumed by later passe
 
 ## Determinism/Validation
 - required mapped fields validated per source
+- GB street-source gate examples:
+  - `os_open_usrn`: `usrn`
+  - `os_open_names`: `feature_id`, `street_name`
+  - `os_open_roads`: `segment_id`, `road_name`
 - heavy-volume sources (`os_open_uprn`, `os_open_lids`, `nsul`) use set-based SQL transforms
 - explicit relation typing for LIDS (`toid_usrn`, `uprn_usrn`)
 - pass-local `work_mem` is raised for large sort/dedupe transforms to reduce temp-file spill
