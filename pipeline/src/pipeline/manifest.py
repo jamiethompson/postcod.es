@@ -262,6 +262,12 @@ def load_bundle_manifest(path: Path) -> BuildBundleManifest:
             "Bundle manifest missing required sources for profile "
             f"{build_profile}: {', '.join(missing)}"
         )
+    unexpected = sorted(set(source_runs.keys()) - required)
+    if unexpected:
+        raise ManifestError(
+            "Bundle manifest has sources outside profile "
+            f"{build_profile}: {', '.join(unexpected)}"
+        )
 
     for source_name in required:
         if len(source_runs.get(source_name, ())) == 0:

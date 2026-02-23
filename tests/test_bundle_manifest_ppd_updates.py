@@ -86,6 +86,24 @@ class BundleManifestPpdUpdatesTests(unittest.TestCase):
         manifest = load_bundle_manifest(path)
         self.assertEqual(("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",), manifest.source_runs["ppd"])
 
+    def test_bundle_rejects_sources_not_in_profile(self) -> None:
+        payload = {
+            "build_profile": "gb_core",
+            "source_runs": {
+                "onspd": "11111111-1111-1111-1111-111111111111",
+                "os_open_usrn": "22222222-2222-2222-2222-222222222222",
+                "os_open_names": "33333333-3333-3333-3333-333333333333",
+                "os_open_roads": "44444444-4444-4444-4444-444444444444",
+                "os_open_uprn": "55555555-5555-5555-5555-555555555555",
+                "os_open_lids": "66666666-6666-6666-6666-666666666666",
+                "nsul": "77777777-7777-7777-7777-777777777777",
+                "ppd": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            },
+        }
+        path = self._write_manifest(payload)
+        with self.assertRaises(ManifestError):
+            load_bundle_manifest(path)
+
 
 if __name__ == "__main__":
     unittest.main()
