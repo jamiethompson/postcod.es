@@ -16,6 +16,13 @@
 5. Collapse internal whitespace.
 6. Apply configured token aliases deterministically.
 
+## USRN Metadata Normalisation
+
+For `street_type` and `street_status` extracted from Open USRN:
+- trim whitespace first; blank becomes null
+- uppercase the stored token value
+- preserve null when source columns are absent
+
 ## Open Names URI/Type Extraction
 
 For postcode place/admin enrichment fields:
