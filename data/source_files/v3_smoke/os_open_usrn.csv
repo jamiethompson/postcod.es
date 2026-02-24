@@ -1,2 +1,2 @@
-usrn,street_name,street_class,street_status
+usrn,street_name,street_type,street_status
 1000001,Downing Street,residential,open

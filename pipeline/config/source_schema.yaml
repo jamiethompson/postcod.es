@@ -26,7 +26,8 @@
       "field_map": {
         "usrn": "usrn",
         "street_name": "street_name",
-        "street_class": "street_type"
+        "street_type": "street_type",
+        "street_status": "street_status"
       }
     },
     "os_open_names": {

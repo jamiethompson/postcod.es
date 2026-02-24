@@ -40,6 +40,15 @@ class StageMappingContractTests(unittest.TestCase):
             set(sources["os_open_roads"]["required_fields"]),
             {"segment_id", "road_name"},
         )
+        self.assertEqual(
+            sources["os_open_usrn"]["field_map"]["street_type"],
+            "street_type",
+        )
+        self.assertEqual(
+            sources["os_open_usrn"]["field_map"]["street_status"],
+            "street_status",
+        )
+        self.assertNotIn("street_class", sources["os_open_usrn"]["field_map"])
 
     def test_stage_extractors_use_mapped_field_lookup(self) -> None:
         text = WORKFLOWS.read_text(encoding="utf-8")
@@ -47,6 +56,8 @@ class StageMappingContractTests(unittest.TestCase):
         self.assertIn('postcode_raw = _field_value(row, field_map, "postcode")', text)
         self.assertIn('toid_raw = _field_value(row, field_map, "toid")', text)
         self.assertIn('usrn_raw = _field_value(row, field_map, "usrn")', text)
+        self.assertIn('street_type_raw = _field_value(row, field_map, "street_type")', text)
+        self.assertIn('street_status_raw = _field_value(row, field_map, "street_status")', text)
 
     def test_required_field_validation_is_not_limited_to_first_raw_row(self) -> None:
         text = WORKFLOWS.read_text(encoding="utf-8")
