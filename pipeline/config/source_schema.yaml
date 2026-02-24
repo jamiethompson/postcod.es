@@ -48,9 +48,12 @@
       ],
       "field_map": {
         "feature_id": "ID",
+        "type": "TYPE",
         "toid": "RELATED_SPATIAL_OBJECT",
         "postcode": "postcode",
+        "postcode_district": "POSTCODE_DISTRICT",
         "street_name": "NAME1",
+        "street_name_alt": "NAME2",
         "local_type": "LOCAL_TYPE",
         "populated_place": "POPULATED_PLACE",
         "populated_place_uri": "POPULATED_PLACE_URI",
@@ -73,6 +76,8 @@
       "field_map": {
         "segment_id": "id",
         "road_id": "road_name_toid",
+        "geometry": "geometry",
+        "usrn": "usrn",
         "postcode": "postcode",
         "road_name": "name_1"
       }
