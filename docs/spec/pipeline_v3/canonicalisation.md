@@ -30,6 +30,13 @@ Classifier outputs:
 
 Road-number detection uses deterministic UK route-label regex matching (for example: `A390`, `B1249`, `M1`, `A1(M)`, `A 390`).
 
+## USRN Metadata Normalisation
+
+For `street_type` and `street_status` extracted from Open USRN:
+- trim whitespace first; blank becomes null
+- uppercase the stored token value
+- preserve null when source columns are absent
+
 ## Open Names URI/Type Extraction
 
 For postcode place/admin enrichment fields:

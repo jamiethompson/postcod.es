@@ -52,6 +52,17 @@ Normalisation rules:
 - preserve extracted token case
 - preserve source casing for `place`
 
+### 2.3 USRN Street Metadata
+
+- `street_type` is the canonical Open USRN class field name in V3 (`street_class` is deprecated).
+- Pass `0b_stage_normalisation` stages `street_type`/`street_status` per `usrn` even when source rows lack a direct street name.
+- Pass `2_gb_canonical_streets` applies these staged metadata fields to both:
+  - direct USRN street rows
+  - inferred-name USRN street rows built from Open Names/Open Roads + LIDS joins.
+- Metadata normalisation follows canonicalisation rules:
+  - trim whitespace; empty string maps to null
+  - uppercase stored token values
+
 ### 2.1 PPD Baseline + Updates Rule
 
 - The 4.2GB PPD full baseline is ingested once and retained.

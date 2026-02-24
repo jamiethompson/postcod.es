@@ -17,6 +17,7 @@ Build `core.streets_usrn` as canonical street dictionary keyed by USRN.
 - set-based inferred insert (Open Names/Open Roads + LIDS) for USRNs not already present
 - inferred name ranking uses deterministic tie-breaks by evidence count, then name quality rank, then source priority, then casefolded/name lexical order
 - road-number labels are down-ranked in inferred naming, and excluded when postal-plausible names exist for the same USRN
+- inferred inserts pull `street_type`/`street_status` from staged Open USRN metadata by `usrn` when present
 - stage join indexes on `stage.open_names_road_feature(build_run_id, toid)` and `(build_run_id, postcode_norm)` support Pass 2/3 joins
 - post-pass `ANALYZE` keeps `core.streets_usrn` statistics current for Pass 4 joins
 

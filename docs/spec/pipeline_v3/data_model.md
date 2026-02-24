@@ -72,6 +72,15 @@ Open Names stage contracts:
     - `county_unitary_name`, `county_unitary_toid`, `county_unitary_type`
     - `district_borough_name`, `district_borough_toid`, `district_borough_type`
 
+### `core.streets_usrn` key columns
+
+- canonical street identity and naming:
+  - `usrn`, `street_name`, `street_name_casefolded`
+- USRN metadata from Open USRN, normalised at stage:
+  - `street_type`, `street_status`
+- provenance:
+  - `usrn_run_id`
+
 ## Derived Layer
 
 ### `derived.postcode_street_candidates`

@@ -712,6 +712,8 @@ def _field_name_candidates(field_map: dict[str, str], logical_key: str) -> tuple
         "identifier_2": ("id_2", "right_id"),
         "left_id": ("id_1", "identifier_1"),
         "right_id": ("id_2", "identifier_2"),
+        "street_type": ("street_class",),
+        "street_class": ("street_type",),
     }
     aliases = legacy_aliases.get(logical_key, ())
     names.extend(aliases)
@@ -1162,16 +1164,19 @@ def _populate_stage_usrn(
             usrn,
             street_name,
             street_name_casefolded,
-            street_class,
+            street_type,
             street_status,
             usrn_run_id
         ) VALUES (%s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (build_run_id, usrn)
         DO UPDATE SET
-            street_name = EXCLUDED.street_name,
-            street_name_casefolded = EXCLUDED.street_name_casefolded,
-            street_class = EXCLUDED.street_class,
-            street_status = EXCLUDED.street_status,
+            street_name = COALESCE(EXCLUDED.street_name, stage.streets_usrn_input.street_name),
+            street_name_casefolded = COALESCE(
+                EXCLUDED.street_name_casefolded,
+                stage.streets_usrn_input.street_name_casefolded
+            ),
+            street_type = COALESCE(EXCLUDED.street_type, stage.streets_usrn_input.street_type),
+            street_status = COALESCE(EXCLUDED.street_status, stage.streets_usrn_input.street_status),
             usrn_run_id = EXCLUDED.usrn_run_id
         """
     )
@@ -1188,28 +1193,37 @@ def _populate_stage_usrn(
     ):
         usrn_raw = _field_value(row, field_map, "usrn")
         name_raw = _field_value(row, field_map, "street_name")
-        if usrn_raw in (None, "") or name_raw in (None, ""):
+        if usrn_raw in (None, ""):
             continue
         try:
             usrn = int(usrn_raw)
         except Exception:
             continue
-        street_name = str(name_raw).strip()
-        folded = street_casefold(street_name)
-        if not street_name or folded is None:
-            continue
+        street_name_value = text_or_none(name_raw)
+        folded = street_casefold(street_name_value)
+        if street_name_value is None or folded is None:
+            street_name_value = None
+            folded = None
 
-        street_class_raw = _field_value(row, field_map, "street_class")
+        street_type_raw = _field_value(row, field_map, "street_type")
         street_status_raw = _field_value(row, field_map, "street_status")
+        street_type_value = text_or_none(street_type_raw)
+        street_status_value = text_or_none(street_status_raw)
+        if street_type_value is not None:
+            street_type_value = street_type_value.upper()
+        if street_status_value is not None:
+            street_status_value = street_status_value.upper()
+        if street_name_value is None and street_type_value is None and street_status_value is None:
+            continue
 
         payload.append(
             (
                 build_run_id,
                 usrn,
-                street_name,
+                street_name_value,
                 folded,
-                str(street_class_raw).strip() if street_class_raw not in (None, "") else None,
-                str(street_status_raw).strip() if street_status_raw not in (None, "") else None,
+                street_type_value,
+                street_status_value,
                 ingest_run_id,
             )
         )
@@ -2606,7 +2620,7 @@ def _pass_2_gb_canonical_streets(conn: psycopg.Connection, build_run_id: str) ->
                 usrn,
                 street_name,
                 street_name_casefolded,
-                street_class,
+                street_type,
                 street_status,
                 usrn_run_id
             )
@@ -2615,11 +2629,13 @@ def _pass_2_gb_canonical_streets(conn: psycopg.Connection, build_run_id: str) ->
                 s.usrn,
                 s.street_name,
                 s.street_name_casefolded,
-                s.street_class,
+                s.street_type,
                 s.street_status,
                 s.usrn_run_id
             FROM stage.streets_usrn_input AS s
             WHERE s.build_run_id = %(build_run_id)s
+              AND s.street_name IS NOT NULL
+              AND s.street_name_casefolded IS NOT NULL
             ORDER BY s.usrn ASC
             """,
             {"build_run_id": build_run_id},
@@ -2763,12 +2779,12 @@ def _pass_2_gb_canonical_streets(conn: psycopg.Connection, build_run_id: str) ->
             ),
             inferred_usrn AS (
                 SELECT
-                    usrn,
-                    street_name,
-                    street_name_casefolded,
-                    NULL::text AS street_class,
-                    NULL::text AS street_status,
-                    usrn_run_id
+                    ranked.usrn,
+                    ranked.street_name,
+                    ranked.street_name_casefolded,
+                    attrs.street_type,
+                    attrs.street_status,
+                    COALESCE(attrs.usrn_run_id, ranked.usrn_run_id) AS usrn_run_id
                 FROM (
                     SELECT
                         usrn,
@@ -2785,14 +2801,17 @@ def _pass_2_gb_canonical_streets(conn: psycopg.Connection, build_run_id: str) ->
                         ) AS rn
                     FROM filtered
                 ) AS ranked
-                WHERE rn = 1
+                LEFT JOIN stage.streets_usrn_input AS attrs
+                  ON attrs.build_run_id = %(build_run_id)s
+                 AND attrs.usrn = ranked.usrn
+                WHERE ranked.rn = 1
             )
             INSERT INTO core.streets_usrn (
                 produced_build_run_id,
                 usrn,
                 street_name,
                 street_name_casefolded,
-                street_class,
+                street_type,
                 street_status,
                 usrn_run_id
             )
@@ -2801,7 +2820,7 @@ def _pass_2_gb_canonical_streets(conn: psycopg.Connection, build_run_id: str) ->
                 inferred.usrn,
                 inferred.street_name,
                 inferred.street_name_casefolded,
-                inferred.street_class,
+                inferred.street_type,
                 inferred.street_status,
                 inferred.usrn_run_id
             FROM inferred_usrn AS inferred

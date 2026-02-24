@@ -36,6 +36,9 @@ Transform raw payloads into typed/stable stage contracts consumed by later passe
   - `os_open_usrn`: `usrn`
   - `os_open_names`: `feature_id`, `street_name`
   - `os_open_roads`: `segment_id`, `road_name`
+- Open USRN metadata extract:
+  - `street_type` / `street_status` are uppercased and staged by `usrn`
+  - rows with missing direct `street_name` are retained when metadata exists so Pass 2 inference can inherit metadata
 - Open Names postcode enrichment extract:
   - `LOCAL_TYPE='Postcode'` rows stage to `stage.open_names_postcode_feature`
   - postcode key derives from normalised `NAME1`
