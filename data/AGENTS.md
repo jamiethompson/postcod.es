@@ -9,7 +9,7 @@ Manifest/source contract changes must be reflected in docs (`docs/spec/...` and 
 ## Conventions
 - source manifests live under `data/manifests/`
 - keep source naming aligned with `pipeline/src/pipeline/manifest.py`
-- avoid absolute local paths in documentation; manifests may contain absolute file paths for runtime only
+- use repository-relative `file_path` values in manifests; do not commit absolute local filesystem paths
 - update bundle manifests when source keys change
 
 ## Useful References

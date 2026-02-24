@@ -8,7 +8,7 @@
   "files": [
     {
       "file_role": "onspd_uk_csv",
-      "file_path": "/Users/jamie/code/postcod.es/data/source_files/real/onspd/Data/ONSPD_NOV_2025_UK.csv",
+      "file_path": "data/source_files/real/onspd/Data/ONSPD_NOV_2025_UK.csv",
       "sha256": "d4b54fc4c192495dcb33d4559f225237a46af7428edcb648b2fbb76bf4e9bfe8",
       "size_bytes": 1448136855,
       "format": "csv"

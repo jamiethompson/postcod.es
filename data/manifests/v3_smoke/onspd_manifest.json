@@ -8,7 +8,7 @@
   "files": [
     {
       "file_role": "primary",
-      "file_path": "/Users/jamie/code/postcod.es/data/source_files/v3_smoke/onspd.csv",
+      "file_path": "data/source_files/v3_smoke/onspd.csv",
       "sha256": "c255cdcf57adb5f5531c0622d0bda81cb4166ccddd7b41f148737a752279fb8b",
       "size_bytes": 186,
       "format": "csv",

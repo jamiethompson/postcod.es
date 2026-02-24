@@ -3,7 +3,7 @@
   "release_id": "2026-Q1-E2E-P2",
   "source_url": "https://example.local/open-names-sample",
   "licence": "OGL v3.0",
-  "file_path": "/Users/jamie/code/postcod.es/data/source_files/e2e/open_names_sample.csv",
+  "file_path": "data/source_files/e2e/open_names_sample.csv",
   "expected_sha256": "b4ca5267fe2a4d7fefe68eca48e3df1bddc8e19d8ac7c99be0293ae2a5e39dac",
   "format": "csv",
   "column_map": {

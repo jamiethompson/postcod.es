@@ -3,7 +3,7 @@
   "release_id": "osopenuprn_202602",
   "source_url": "https://api.os.uk/downloads/v1/products/OpenUPRN/downloads?area=GB&format=CSV&redirect",
   "licence": "http://os.uk/opendata/licence",
-  "file_path": "/Users/jamie/code/postcod.es/data/source_files/real/open_uprn/osopenuprn_202602.csv",
+  "file_path": "data/source_files/real/open_uprn/osopenuprn_202602.csv",
   "expected_sha256": "69156b9fd66c9195dd23e0aa81f20136c0a55c408b27cd729fe79ed3d0afc911",
   "format": "csv",
   "column_map": {

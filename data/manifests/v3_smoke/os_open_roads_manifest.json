@@ -8,7 +8,7 @@
   "files": [
     {
       "file_role": "primary",
-      "file_path": "/Users/jamie/code/postcod.es/data/source_files/v3_smoke/os_open_roads.csv",
+      "file_path": "data/source_files/v3_smoke/os_open_roads.csv",
       "sha256": "449935b3e8d6b4b0809c16bd2fb0630acd696a52e0745b902f81b465a6e4b39f",
       "size_bytes": 95,
       "format": "csv",

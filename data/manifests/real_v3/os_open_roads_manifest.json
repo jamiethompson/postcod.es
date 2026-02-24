@@ -8,7 +8,7 @@
   "files": [
     {
       "file_role": "open_roads_road_link_gpkg",
-      "file_path": "/Users/jamie/code/postcod.es/data/source_files/real/open_roads/Data/oproad_gb.gpkg",
+      "file_path": "data/source_files/real/open_roads/Data/oproad_gb.gpkg",
       "sha256": "25cfcf41ce89d49a1714798b25db93d4100b98ff0b07ec6debd20b602c01cc22",
       "size_bytes": 2133966848,
       "format": "gpkg",
