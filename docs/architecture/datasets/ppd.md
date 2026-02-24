@@ -17,6 +17,8 @@ PPD is a gap-fill source for lower-confidence address-derived street evidence.
   - `street_token_raw`, `street_token_casefolded`
 
 ## Downstream Transformations
+- Pass 5 can optionally use PPD street tokens as tie-break ranking evidence for Open Roads fallback candidates.
+- PPD never generates pass-5 candidates directly.
 - Pass 7 performs token matching against canonical streets.
 - Generates `ppd_parse_matched` or `ppd_parse_unmatched` candidate types.
 - Used as additive gap-fill only; does not override stronger evidence.

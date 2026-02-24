@@ -38,6 +38,23 @@ Published dataset pointer log.
 - `stage.*` holds typed, normalised rows that build passes consume.
 - `stage.*` is treated as transient workspace and is truncated at Pass `0b` start.
 
+Open Names stage contracts:
+- Road stage includes linkage and geometry support:
+  - `toid`, `related_toid`, `feature_toid`
+  - `postcode_norm`, `postcode_district_norm`
+  - `geom_bng` (`Point`, SRID 27700)
+- Open Roads stage includes geometry support:
+  - `geom_bng` (`LineString`, SRID 27700)
+- Non-road Open Names feature family tables:
+  - `stage.open_names_transport_network`
+  - `stage.open_names_populated_place`
+  - `stage.open_names_landcover`
+  - `stage.open_names_landform`
+  - `stage.open_names_hydrography`
+  - `stage.open_names_other`
+- Union analysis view:
+  - `stage.v_open_names_features_all`
+
 ## Core Layer
 
 - `core.postcodes`

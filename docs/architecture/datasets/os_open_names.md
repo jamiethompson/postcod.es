@@ -10,14 +10,17 @@ Open Names contributes:
 - Raw table: `raw.os_open_names_row`
 - Stage table: `stage.open_names_road_feature`
 - Stage table: `stage.open_names_postcode_feature`
+- Stage family tables: `stage.open_names_<type_family>` (non-road/non-postcode)
+- Union analysis view: `stage.v_open_names_features_all`
 - Primary pass usage: Pass `3_open_names_candidates`
 
 ## Stage Normalisation
 - Normalised fields include:
   - `feature_id`
-  - `toid` (when present)
+  - `toid` (legacy), `related_toid`, `feature_toid` (when present)
   - `street_name_raw`, `street_name_casefolded`
-  - `postcode_norm` (when available in the source release)
+  - `postcode_norm`, `postcode_district_norm` (when available in the source release)
+  - `geom_bng` (point geometry, SRID 27700 when coordinates are available)
 - Postcode feature normalisation includes:
   - `postcode_norm`, `postcode_display` (derived from `NAME1` where `LOCAL_TYPE='Postcode'`)
   - place/admin label fields: `populated_place`, `district_borough`, `county_unitary`, `region`, `country`
@@ -28,6 +31,9 @@ Open Names contributes:
     - `district_borough_type`, `district_borough_toid`
   - deterministic source ordering via `source_row_num`
 - Road/transport filtering is applied during staging.
+- Non-road/non-postcode features are routed by `TYPE` to family tables via config:
+  - `pipeline/config/open_names_type_families.yaml`
+  - each family row includes deterministic `linkage_policy`
 - Required mapping gate:
   - `source_schema.yaml` must resolve `feature_id` and `street_name`.
 
@@ -38,6 +44,7 @@ Open Names contributes:
   - `core.postcodes.*_toid` and `*_type` fields are parsed deterministically from Open Names URIs
   - duplicate postcode keys are logged in pass QA metrics
 - Pass 3 inserts `names_postcode_feature` candidates.
+- Pass 3 base candidate TOID key uses `COALESCE(related_toid, feature_toid, toid)`.
 - Pass 3 appends `open_lids_toid_usrn` candidates when TOID resolves via LIDS.
 - Pass 3 records append-only lineage in `derived.postcode_street_candidate_lineage`.
 

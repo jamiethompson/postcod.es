@@ -13,8 +13,10 @@ Build `core.streets_usrn` as canonical street dictionary keyed by USRN.
 ## Execution Shape
 - set-based direct insert from `stage.streets_usrn_input`
 - inferred path pre-aggregates TOID-name evidence from Open Names and Open Roads before joining to LIDS
+- Open Names TOID key for inferred path is resolved as `COALESCE(related_toid, feature_toid, toid)`
 - set-based inferred insert (Open Names/Open Roads + LIDS) for USRNs not already present
-- inferred name ranking uses deterministic tie-breaks by evidence count, then source priority, then casefolded/name lexical order
+- inferred name ranking uses deterministic tie-breaks by evidence count, then name quality rank, then source priority, then casefolded/name lexical order
+- road-number labels are down-ranked in inferred naming, and excluded when postal-plausible names exist for the same USRN
 - stage join indexes on `stage.open_names_road_feature(build_run_id, toid)` and `(build_run_id, postcode_norm)` support Pass 2/3 joins
 - post-pass `ANALYZE` keeps `core.streets_usrn` statistics current for Pass 4 joins
 
