@@ -16,6 +16,7 @@ This page explains what new product value is created at each pass, not just what
   - converts heterogeneous source schemas to deterministic internal contracts
   - enforces required-field gates before downstream joins
   - materialises `LIDS` relation typing (`id_1`, `id_2`, `relation_type`)
+  - expands Open Names staging into typed feature-family tables for future deterministic cascades
 
 ## Pass 1: ONSPD Backbone
 - Inputs: `stage.onspd_postcode`.
@@ -52,6 +53,7 @@ This page explains what new product value is created at each pass, not just what
 - Value added:
   - closes obvious holes where no high-confidence candidate exists
   - improves postcode coverage while preserving confidence transparency
+  - improves fallback ranking quality with postal-name guardrails and optional PPD tie-break scoring
 
 ## Pass 6: NI Candidates (Optional Profile)
 - Inputs: `stage.osni_street_point`, `stage.dfi_road_segment`, `core.postcodes`.

@@ -1,0 +1,37 @@
+{
+  "default_type_family": "other",
+  "type_to_family": {
+    "transportnetwork": "transport_network",
+    "populatedplace": "populated_place",
+    "landcover": "landcover",
+    "landform": "landform",
+    "hydrography": "hydrography",
+    "other": "other"
+  },
+  "families": {
+    "transport_network": {
+      "table": "stage.open_names_transport_network",
+      "linkage_policy": "eligible"
+    },
+    "populated_place": {
+      "table": "stage.open_names_populated_place",
+      "linkage_policy": "context_only"
+    },
+    "landcover": {
+      "table": "stage.open_names_landcover",
+      "linkage_policy": "excluded"
+    },
+    "landform": {
+      "table": "stage.open_names_landform",
+      "linkage_policy": "excluded"
+    },
+    "hydrography": {
+      "table": "stage.open_names_hydrography",
+      "linkage_policy": "context_only"
+    },
+    "other": {
+      "table": "stage.open_names_other",
+      "linkage_policy": "context_only"
+    }
+  }
+}

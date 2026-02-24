@@ -78,6 +78,27 @@ Normalisation rules:
   - `gb_core_ppd`: GB core + PPD
   - `core_ni`: GB core + NI (without PPD)
 
+### 2.3 Open Names Feature Family Staging
+
+- Pass `0b_stage_normalisation` keeps Open Names roads and postcodes as dedicated stage tables:
+  - `stage.open_names_road_feature`
+  - `stage.open_names_postcode_feature`
+- Non-road and non-postcode Open Names features are staged into typed family tables:
+  - `stage.open_names_transport_network`
+  - `stage.open_names_populated_place`
+  - `stage.open_names_landcover`
+  - `stage.open_names_landform`
+  - `stage.open_names_hydrography`
+  - `stage.open_names_other`
+- Type-family routing is config-driven via `pipeline/config/open_names_type_families.yaml`.
+- Each family row carries deterministic `linkage_policy` (`eligible`, `context_only`, `excluded`).
+- `stage.v_open_names_features_all` provides a deterministic union across all non-road/non-postcode family tables.
+
+### 2.4 Future Feature-Cascade Track (Planning)
+
+- A future heuristic track (`H6`) is reserved for deterministic feature-cascade promotion using selected non-road Open Names families.
+- Scope for this release is staging + evidence readiness only; production candidate logic remains unchanged for non-road feature families.
+
 ## 3. Candidate Evidence Contract
 
 `derived.postcode_street_candidates` is an immutable evidence log.
@@ -88,6 +109,14 @@ Normalisation rules:
 - TOID confirmation creates a new `open_lids_toid_usrn` candidate row.
 - Promotion lineage is recorded in `derived.postcode_street_candidate_lineage`.
 - Existing candidate rows are never updated for `candidate_type`, `confidence`, `usrn`, or `evidence_ref`.
+
+### 3.2 Pass 3 Conditional Gate
+
+- Pass 3 base evidence resolves Open Names linkage using:
+  - `COALESCE(related_toid, feature_toid, toid)` as deterministic TOID key.
+- If no Open Names road rows are staged for the build, pass 3 is skipped with zero outputs and explicit checkpoint metric:
+  - `qa.pass3_skipped_no_open_names_rows`
+- If staged Open Names road rows and core postcode rows exist but pass 3 inserts zero base candidates, the build fails fast.
 
 ## 4. Confidence and Candidate Types
 
@@ -109,6 +138,43 @@ Confidence enum:
 
 NI confidence cap:
 - NI candidate types cannot exceed `medium` in this release.
+
+### 4.1 Pass 5 Spatial Fallback Policy
+
+- Pass 5 remains low-confidence fallback (`confidence='low'`) for GB postcodes lacking high-confidence candidates.
+- Spatial candidate generation uses Open Roads geometry with radius `150m` (EPSG:27700).
+- If no spatial candidates exist for a postcode, postcode-key fallback candidates from Open Roads are permitted.
+- Name-quality guardrail classifies road names as:
+  - `postal_plausible`
+  - `road_number`
+  - `unknown`
+- If any `postal_plausible` candidate exists for a postcode, `road_number` candidates are excluded.
+- Candidate ranking is deterministic and ordered by:
+  1. name-quality rank (`postal_plausible` > `unknown` > `road_number`)
+  2. optional PPD street-match score (tie-break only)
+  3. distance ascending
+  4. segment id ascending (`COLLATE "C"`)
+- Optional PPD tie-break is enabled only when:
+  - the build includes source `ppd`
+  - staged PPD rows exist for the build
+  - environment flag `PIPELINE_PASS5_ENABLE_PPD_TIE_BREAK` is not disabled
+- PPD never creates pass-5 candidates; it only ranks spatially matched pass-5 candidates.
+- Pass-5 evidence JSON includes:
+  - `distance_m`
+  - `name_quality_class`
+  - `name_quality_reason`
+  - `fallback_policy`
+  - `ppd_match_score`
+  - `ppd_matched_street`
+  - `tie_break_basis`
+- Pass-5 checkpoint counters include:
+  - `pass5_candidates_postal_plausible`
+  - `pass5_candidates_road_number`
+  - `pass5_road_number_only_wins`
+  - `pass5_ppd_tie_break_applied_count`
+  - `pass5_ppd_match_exact_count`
+  - `pass5_ppd_match_partial_count`
+  - `pass5_ppd_match_none_count`
 
 ## 5. Frequency and Probability
 

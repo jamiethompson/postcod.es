@@ -13,11 +13,14 @@ class Pass2ToidNameFallbackContractTests(unittest.TestCase):
         self.assertIn("FROM stage.open_names_road_feature AS n", text)
         self.assertIn("FROM stage.open_roads_segment AS r", text)
         self.assertIn("r.road_id AS toid", text)
+        self.assertIn("COALESCE(n.related_toid, n.feature_toid, n.toid) AS toid", text)
 
     def test_pass2_ranking_uses_source_priority_after_evidence_count(self) -> None:
         text = WORKFLOWS.read_text(encoding="utf-8")
         self.assertIn("MIN(n.source_priority)::smallint AS source_priority", text)
+        self.assertIn("MIN(n.name_quality_rank)::smallint AS name_quality_rank", text)
         self.assertIn("ORDER BY evidence_count DESC,", text)
+        self.assertIn("name_quality_rank ASC", text)
         self.assertIn("source_priority ASC", text)
 
 

@@ -16,6 +16,10 @@ Create medium-confidence street candidates and append-only TOID-confirmed promot
 ## Contract
 - candidate table is immutable evidence
 - promotions are insert-only; parent rows are never mutated
+- TOID linkage key uses `COALESCE(related_toid, feature_toid, toid)` from Open Names road stage
+- pass runs conditionally:
+  - if no staged Open Names road rows exist, pass returns zero rows with explicit skip metric
+  - if staged Open Names rows and core postcode rows exist but base insert is zero, build fails fast
 
 ## Value Added
 - broad named-road evidence

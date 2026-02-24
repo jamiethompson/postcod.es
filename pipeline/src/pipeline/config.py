@@ -25,6 +25,10 @@ def source_schema_config_path() -> Path:
     return repo_root() / "pipeline" / "config" / "source_schema.yaml"
 
 
+def open_names_type_families_config_path() -> Path:
+    return repo_root() / "pipeline" / "config" / "open_names_type_families.yaml"
+
+
 def frequency_weights_config_path() -> Path:
     return repo_root() / "pipeline" / "config" / "frequency_weights.yaml"
 

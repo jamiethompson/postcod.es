@@ -12,6 +12,13 @@ Transform raw payloads into typed/stable stage contracts consumed by later passe
 - `stage.streets_usrn_input`
 - `stage.open_names_road_feature`
 - `stage.open_names_postcode_feature`
+- `stage.open_names_transport_network`
+- `stage.open_names_populated_place`
+- `stage.open_names_landcover`
+- `stage.open_names_landform`
+- `stage.open_names_hydrography`
+- `stage.open_names_other`
+- `stage.v_open_names_features_all` (analysis union view)
 - `stage.open_roads_segment`
 - `stage.uprn_point`
 - `stage.open_lids_toid_usrn`
@@ -20,6 +27,7 @@ Transform raw payloads into typed/stable stage contracts consumed by later passe
 - optional NI/PPD stage tables
 - checkpoint metric: `stage.open_lids_relation_count`
 - checkpoint metric: `qa.open_names_postcode_duplicate_keys`
+- checkpoint metrics: `qa.open_names_feature_family_row_counts.<family>`
 
 ## Determinism/Validation
 - required mapped fields validated per source
@@ -35,6 +43,10 @@ Transform raw payloads into typed/stable stage contracts consumed by later passe
   - `LOCAL_TYPE='Postcode'` rows stage to `stage.open_names_postcode_feature`
   - postcode key derives from normalised `NAME1`
   - deterministic duplicate handling uses `source_row_num` ordering
+- Open Names non-road/non-postcode features are routed by `TYPE` through config map:
+  - `pipeline/config/open_names_type_families.yaml`
+  - each family row carries `linkage_policy` for downstream eligibility decisions
+- Open Roads geometry bytes are decoded from GeoPackage payloads into `geom_bng` and validated as SRID 27700
 - heavy-volume sources (`os_open_uprn`, `os_open_lids`, `nsul`) use set-based SQL transforms
 - explicit relation typing for LIDS (`toid_usrn`, `uprn_usrn`)
 - pass-local `work_mem` is raised for large sort/dedupe transforms to reduce temp-file spill

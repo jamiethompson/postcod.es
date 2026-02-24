@@ -16,6 +16,20 @@
 5. Collapse internal whitespace.
 6. Apply configured token aliases deterministically.
 
+## Pass 5 Name-Quality Classifier
+
+Open Roads fallback names are normalised before quality classing:
+1. Trim whitespace.
+2. Uppercase.
+3. Collapse internal whitespace.
+
+Classifier outputs:
+- `postal_plausible`
+- `road_number`
+- `unknown`
+
+Road-number detection uses deterministic UK route-label regex matching (for example: `A390`, `B1249`, `M1`, `A1(M)`, `A 390`).
+
 ## USRN Metadata Normalisation
 
 For `street_type` and `street_status` extracted from Open USRN:
@@ -50,6 +64,12 @@ Probability ranking (descending) uses:
 2. confidence rank desc (`high` > `medium` > `low` > `none`)
 3. canonical street name `COLLATE "C"` asc
 4. USRN asc (nulls last)
+
+Pass-5 candidate ranking (ascending) uses:
+1. name-quality rank (`postal_plausible` > `unknown` > `road_number`)
+2. PPD match score desc (when enabled)
+3. distance asc (nulls last)
+4. segment id `COLLATE "C"` asc
 
 ## JSON and Array Ordering
 

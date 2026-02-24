@@ -1,0 +1,18 @@
+{
+  "source_name": "ppd",
+  "source_version": "PPD_COMPLETE_2026_01",
+  "retrieved_at_utc": "2026-02-24T19:13:42Z",
+  "source_url": "https://price-paid-data.publicdata.landregistry.gov.uk/pp-complete.csv",
+  "processing_git_sha": "f9a7f52d47a6a34b389c6fe94ac7b375aa4412d0",
+  "notes": "Downloaded HM Land Registry full PPD baseline CSV endpoint and normalized to pipeline ppd schema fields (row_hash, postcode, street, house_number). Raw file retained under data/source_files/real_v3/ppd/raw.",
+  "files": [
+    {
+      "file_role": "ppd_complete_normalized_csv",
+      "file_path": "/Users/jamie/.codex/worktrees/28ab/postcod.es/data/source_files/real_v3/ppd/normalized/ppd_complete_2026_01_normalized.csv",
+      "sha256": "e53ef27219178df4f09a89cbdaeb8ba9a9db182968a7bd3b60591dfae7378a41",
+      "size_bytes": 1981349616,
+      "format": "csv",
+      "row_count_expected": 30906560
+    }
+  ]
+}
