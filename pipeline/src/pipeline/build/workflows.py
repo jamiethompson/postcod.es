@@ -3344,6 +3344,7 @@ def _pass_5_gb_spatial_fallback(conn: psycopg.Connection, build_run_id: str) -> 
                     FROM tmp_pass5_candidates AS c
                     LEFT JOIN tmp_pass5_ppd_tokens AS p
                       ON p.postcode_norm = c.postcode_norm
+                    WHERE c.is_spatial
                 )
                 UPDATE tmp_pass5_candidates AS c
                 SET

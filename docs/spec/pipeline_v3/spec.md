@@ -147,7 +147,7 @@ NI confidence cap:
   - the build includes source `ppd`
   - staged PPD rows exist for the build
   - environment flag `PIPELINE_PASS5_ENABLE_PPD_TIE_BREAK` is not disabled
-- PPD never creates pass-5 candidates; it only ranks existing pass-5 candidates.
+- PPD never creates pass-5 candidates; it only ranks spatially matched pass-5 candidates.
 - Pass-5 evidence JSON includes:
   - `distance_m`
   - `name_quality_class`

@@ -22,7 +22,7 @@ Add low-confidence fallback candidates for postcodes lacking high-confidence evi
   4. segment id ascending (`COLLATE "C"`)
 - if any `postal_plausible` candidate exists for a postcode, `road_number` candidates are excluded
 - road-number-only wins are allowed only as last-resort fallback and are explicitly flagged in evidence JSON
-- PPD never creates candidates; it only ranks candidates already found via pass-5 fallback
+- PPD never creates candidates; it only ranks candidates already found via spatial matching
 
 ## Evidence Fields
 - `segment_id`
