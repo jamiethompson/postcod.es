@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import uuid
 from dataclasses import dataclass
@@ -17,6 +18,7 @@ from psycopg.types.json import Jsonb
 
 from pipeline.config import (
     frequency_weights_config_path,
+    open_names_type_families_config_path,
     source_schema_config_path,
 )
 from pipeline.manifest import BUILD_PROFILES, BuildBundleManifest
@@ -100,6 +102,9 @@ CANDIDATE_TYPES = (
     "ppd_parse_unmatched",
 )
 
+ROAD_NUMBER_PATTERN = r"^[ABM][[:space:]]*[0-9]{1,4}([[:space:]]*\([[:space:]]*M[[:space:]]*\))?$"
+PASS5_SPATIAL_RADIUS_M = 150.0
+
 
 def _load_json_config(path: Path) -> dict[str, Any]:
     try:
@@ -113,6 +118,10 @@ def _load_json_config(path: Path) -> dict[str, Any]:
 
 def _schema_config() -> dict[str, Any]:
     return _load_json_config(source_schema_config_path())
+
+
+def _open_names_family_config() -> dict[str, Any]:
+    return _load_json_config(open_names_type_families_config_path())
 
 
 def _weight_config() -> dict[str, Decimal]:
@@ -362,6 +371,35 @@ def _single_source_run(source_runs: dict[str, tuple[str, ...]], source_name: str
             f"Source {source_name} requires exactly one ingest run in bundle; found {len(run_ids)}"
         )
     return run_ids[0]
+
+
+def _build_has_source(conn: psycopg.Connection, build_run_id: str, source_name: str) -> bool:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT 1
+            FROM meta.build_run AS br
+            JOIN meta.build_bundle_source AS bbs
+              ON bbs.bundle_id = br.bundle_id
+            WHERE br.build_run_id = %s
+              AND bbs.source_name = %s
+            LIMIT 1
+            """,
+            (build_run_id, source_name),
+        )
+        return cur.fetchone() is not None
+
+
+def _env_flag_enabled(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
 
 
 def _ordered_run_ids(conn: psycopg.Connection, run_ids: tuple[str, ...]) -> tuple[str, ...]:
@@ -700,6 +738,88 @@ def _field_value(row: dict[str, Any], field_map: dict[str, str], logical_key: st
     return None
 
 
+def _postcode_district_norm(value: str | None) -> str | None:
+    text = (value or "").strip()
+    if text == "":
+        return None
+    normalized = re.sub(r"[^A-Za-z0-9]", "", text.upper())
+    return normalized or None
+
+
+def _geom_point_wkt(x_value: Any, y_value: Any) -> str | None:
+    try:
+        x = int(float(x_value)) if x_value not in (None, "") else None
+        y = int(float(y_value)) if y_value not in (None, "") else None
+    except Exception:
+        return None
+    if x is None or y is None:
+        return None
+    return f"POINT({x} {y})"
+
+
+def _open_names_family_rules() -> dict[str, tuple[str, str]]:
+    payload = _open_names_family_config()
+    default_family_raw = payload.get("default_type_family")
+    type_map_raw = payload.get("type_to_family")
+    families_raw = payload.get("families")
+    if not isinstance(default_family_raw, str) or not default_family_raw.strip():
+        raise BuildError("open_names_type_families missing non-empty default_type_family")
+    if not isinstance(type_map_raw, dict):
+        raise BuildError("open_names_type_families missing object key type_to_family")
+    if not isinstance(families_raw, dict):
+        raise BuildError("open_names_type_families missing object key families")
+
+    family_rules: dict[str, tuple[str, str]] = {}
+    for family_name, family_cfg in families_raw.items():
+        if not isinstance(family_name, str) or not isinstance(family_cfg, dict):
+            raise BuildError("open_names_type_families families entries must be objects")
+        table_name = family_cfg.get("table")
+        linkage_policy = family_cfg.get("linkage_policy")
+        if not isinstance(table_name, str) or not table_name.startswith("stage.open_names_"):
+            raise BuildError(
+                f"open_names_type_families invalid table for family={family_name}: {table_name}"
+            )
+        if linkage_policy not in {"eligible", "context_only", "excluded"}:
+            raise BuildError(
+                f"open_names_type_families invalid linkage_policy for family={family_name}: {linkage_policy}"
+            )
+        family_rules[family_name] = (table_name, linkage_policy)
+
+    if default_family_raw not in family_rules:
+        raise BuildError(
+            "open_names_type_families default_type_family not found in families: "
+            f"{default_family_raw}"
+        )
+
+    resolved: dict[str, tuple[str, str]] = {}
+    for type_name_raw, family_name_raw in type_map_raw.items():
+        if not isinstance(type_name_raw, str) or not isinstance(family_name_raw, str):
+            raise BuildError("open_names_type_families type_to_family must be string:string")
+        family_name = family_name_raw.strip()
+        if family_name not in family_rules:
+            raise BuildError(
+                f"open_names_type_families type_to_family references unknown family: {family_name}"
+            )
+        resolved[type_name_raw.strip().lower()] = family_rules[family_name]
+
+    resolved["__default__"] = family_rules[default_family_raw]
+    return resolved
+
+
+def _open_names_family_rule(
+    type_value: str | None,
+    family_rules: dict[str, tuple[str, str]],
+) -> tuple[str, str]:
+    key = (type_value or "").strip().lower()
+    if key in family_rules:
+        return family_rules[key]
+    return family_rules["__default__"]
+
+
+def _is_open_names_road_local_type(local_type: str) -> bool:
+    return "road" in local_type or "transport" in local_type
+
+
 def _validated_raw_sample_row(
     conn: psycopg.Connection,
     *,
@@ -778,6 +898,12 @@ def _flush_stage_batch(
 
 
 STAGE_TABLES = (
+    "stage.open_names_other",
+    "stage.open_names_hydrography",
+    "stage.open_names_landform",
+    "stage.open_names_landcover",
+    "stage.open_names_populated_place",
+    "stage.open_names_transport_network",
     "stage.ppd_parsed_address",
     "stage.dfi_road_segment",
     "stage.osni_street_point",
@@ -1100,24 +1226,39 @@ def _populate_stage_open_names(
     ingest_run_id: str,
     field_map: dict[str, str],
     required_fields: tuple[str, ...],
-) -> tuple[int, int, int]:
+) -> tuple[int, int, int, dict[str, int]]:
     road_insert_sql = sql.SQL(
         """
         INSERT INTO stage.open_names_road_feature (
             build_run_id,
             feature_id,
             toid,
+            related_toid,
+            feature_toid,
             postcode_norm,
+            postcode_district_norm,
             street_name_raw,
             street_name_casefolded,
+            geom_bng,
             ingest_run_id
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+        ) VALUES (
+            %s, %s, %s, %s, %s, %s, %s, %s, %s,
+            CASE
+                WHEN %s IS NULL THEN NULL
+                ELSE ST_GeomFromText(%s, 27700)
+            END,
+            %s
+        )
         ON CONFLICT (build_run_id, feature_id)
         DO UPDATE SET
             toid = EXCLUDED.toid,
+            related_toid = EXCLUDED.related_toid,
+            feature_toid = EXCLUDED.feature_toid,
             postcode_norm = EXCLUDED.postcode_norm,
+            postcode_district_norm = EXCLUDED.postcode_district_norm,
             street_name_raw = EXCLUDED.street_name_raw,
             street_name_casefolded = EXCLUDED.street_name_casefolded,
+            geom_bng = EXCLUDED.geom_bng,
             ingest_run_id = EXCLUDED.ingest_run_id
         """
     )
@@ -1171,6 +1312,70 @@ def _populate_stage_open_names(
 
     road_payload: list[tuple[Any, ...]] = []
     postcode_payload: list[tuple[Any, ...]] = []
+    family_rules = _open_names_family_rules()
+    family_tables = sorted(
+        {
+            table_name
+            for key, (table_name, _linkage_policy) in family_rules.items()
+            if key != "__default__"
+        }
+    )
+    feature_insert_sql: dict[str, sql.SQL] = {}
+    feature_payloads: dict[str, list[tuple[Any, ...]]] = {}
+    feature_inserted: dict[str, int] = {}
+    for table_name in family_tables:
+        schema_name, raw_table_name = table_name.split(".", 1)
+        feature_insert_sql[table_name] = sql.SQL(
+            """
+            INSERT INTO {}.{} (
+                build_run_id,
+                source_row_num,
+                feature_id,
+                related_toid,
+                name1,
+                name2,
+                type,
+                local_type,
+                postcode_district_norm,
+                populated_place,
+                district_borough,
+                county_unitary,
+                region,
+                country,
+                geom_bng,
+                linkage_policy,
+                ingest_run_id
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                CASE
+                    WHEN %s IS NULL THEN NULL
+                    ELSE ST_GeomFromText(%s, 27700)
+                END,
+                %s,
+                %s
+            )
+            ON CONFLICT (build_run_id, source_row_num)
+            DO UPDATE SET
+                feature_id = EXCLUDED.feature_id,
+                related_toid = EXCLUDED.related_toid,
+                name1 = EXCLUDED.name1,
+                name2 = EXCLUDED.name2,
+                type = EXCLUDED.type,
+                local_type = EXCLUDED.local_type,
+                postcode_district_norm = EXCLUDED.postcode_district_norm,
+                populated_place = EXCLUDED.populated_place,
+                district_borough = EXCLUDED.district_borough,
+                county_unitary = EXCLUDED.county_unitary,
+                region = EXCLUDED.region,
+                country = EXCLUDED.country,
+                geom_bng = EXCLUDED.geom_bng,
+                linkage_policy = EXCLUDED.linkage_policy,
+                ingest_run_id = EXCLUDED.ingest_run_id
+            """
+        ).format(sql.Identifier(schema_name), sql.Identifier(raw_table_name))
+        feature_payloads[table_name] = []
+        feature_inserted[table_name] = 0
+
     road_inserted = 0
     postcode_inserted = 0
 
@@ -1190,6 +1395,10 @@ def _populate_stage_open_names(
         local_type_raw = _field_value(row, field_map, "local_type")
         local_type = str(local_type_raw).strip().lower() if local_type_raw not in (None, "") else ""
 
+        geometry_x_raw = _field_value(row, field_map, "geometry_x")
+        geometry_y_raw = _field_value(row, field_map, "geometry_y")
+        geom_wkt = _geom_point_wkt(geometry_x_raw, geometry_y_raw)
+
         if local_type == "postcode":
             postcode_d = postcode_display(str(name1_raw))
             postcode_n = postcode_norm(str(name1_raw))
@@ -1206,9 +1415,6 @@ def _populate_stage_open_names(
                 region_raw = _field_value(row, field_map, "region")
                 region_uri_raw = _field_value(row, field_map, "region_uri")
                 country_raw = _field_value(row, field_map, "country")
-                geometry_x_raw = _field_value(row, field_map, "geometry_x")
-                geometry_y_raw = _field_value(row, field_map, "geometry_y")
-
                 try:
                     geometry_x = int(float(geometry_x_raw)) if geometry_x_raw not in (None, "") else None
                 except Exception:
@@ -1256,34 +1462,92 @@ def _populate_stage_open_names(
                 )
                 if len(postcode_payload) >= STAGE_INSERT_BATCH_SIZE:
                     postcode_inserted += _flush_stage_batch(conn, postcode_insert_sql, postcode_payload)
-
-        if local_type and "road" not in local_type and "transport" not in local_type:
             continue
 
-        folded = street_casefold(str(name1_raw))
-        if folded is None:
+        if _is_open_names_road_local_type(local_type):
+            folded = street_casefold(str(name1_raw))
+            if folded is None:
+                continue
+
+            postcode_raw = _field_value(row, field_map, "postcode")
+            toid_raw = _field_value(row, field_map, "toid")
+            postcode_district_raw = _field_value(row, field_map, "postcode_district")
+            postcode_n = postcode_norm(str(postcode_raw) if postcode_raw is not None else None)
+            related_toid = text_or_none(str(toid_raw) if toid_raw is not None else None)
+
+            road_payload.append(
+                (
+                    build_run_id,
+                    str(feature_id_raw).strip(),
+                    related_toid,
+                    related_toid,
+                    str(feature_id_raw).strip(),
+                    postcode_n,
+                    _postcode_district_norm(
+                        str(postcode_district_raw) if postcode_district_raw is not None else None
+                    ),
+                    str(name1_raw).strip(),
+                    folded,
+                    geom_wkt,
+                    geom_wkt,
+                    ingest_run_id,
+                )
+            )
+            if len(road_payload) >= STAGE_INSERT_BATCH_SIZE:
+                road_inserted += _flush_stage_batch(conn, road_insert_sql, road_payload)
             continue
 
-        postcode_raw = _field_value(row, field_map, "postcode")
+        type_raw = _field_value(row, field_map, "type")
+        name2_raw = _field_value(row, field_map, "street_name_alt")
+        postcode_district_raw = _field_value(row, field_map, "postcode_district")
+        populated_place_raw = _field_value(row, field_map, "populated_place")
+        district_borough_raw = _field_value(row, field_map, "district_borough")
+        county_unitary_raw = _field_value(row, field_map, "county_unitary")
+        region_raw = _field_value(row, field_map, "region")
+        country_raw = _field_value(row, field_map, "country")
         toid_raw = _field_value(row, field_map, "toid")
-        postcode_n = postcode_norm(str(postcode_raw) if postcode_raw is not None else None)
 
-        road_payload.append(
+        type_text = text_or_none(str(type_raw) if type_raw is not None else None) or "other"
+        family_table, linkage_policy = _open_names_family_rule(type_text, family_rules)
+        feature_payloads[family_table].append(
             (
                 build_run_id,
+                source_row_num,
                 str(feature_id_raw).strip(),
-                str(toid_raw).strip() if toid_raw not in (None, "") else None,
-                postcode_n,
+                text_or_none(str(toid_raw) if toid_raw is not None else None),
                 str(name1_raw).strip(),
-                folded,
+                text_or_none(str(name2_raw) if name2_raw is not None else None),
+                type_text,
+                str(local_type_raw).strip() if local_type_raw not in (None, "") else "",
+                _postcode_district_norm(
+                    str(postcode_district_raw) if postcode_district_raw is not None else None
+                ),
+                text_or_none(str(populated_place_raw) if populated_place_raw is not None else None),
+                text_or_none(str(district_borough_raw) if district_borough_raw is not None else None),
+                text_or_none(str(county_unitary_raw) if county_unitary_raw is not None else None),
+                text_or_none(str(region_raw) if region_raw is not None else None),
+                text_or_none(str(country_raw) if country_raw is not None else None),
+                geom_wkt,
+                geom_wkt,
+                linkage_policy,
                 ingest_run_id,
             )
         )
-        if len(road_payload) >= STAGE_INSERT_BATCH_SIZE:
-            road_inserted += _flush_stage_batch(conn, road_insert_sql, road_payload)
+        if len(feature_payloads[family_table]) >= STAGE_INSERT_BATCH_SIZE:
+            feature_inserted[family_table] += _flush_stage_batch(
+                conn,
+                feature_insert_sql[family_table],
+                feature_payloads[family_table],
+            )
 
     road_inserted += _flush_stage_batch(conn, road_insert_sql, road_payload)
     postcode_inserted += _flush_stage_batch(conn, postcode_insert_sql, postcode_payload)
+    for table_name in family_tables:
+        feature_inserted[table_name] += _flush_stage_batch(
+            conn,
+            feature_insert_sql[table_name],
+            feature_payloads[table_name],
+        )
 
     with conn.cursor() as cur:
         cur.execute(
@@ -1301,7 +1565,11 @@ def _populate_stage_open_names(
         )
         duplicate_postcode_keys = int(cur.fetchone()[0] or 0)
 
-    return road_inserted, postcode_inserted, duplicate_postcode_keys
+    family_counts = {
+        table_name.removeprefix("stage.open_names_"): int(feature_inserted[table_name])
+        for table_name in family_tables
+    }
+    return road_inserted, postcode_inserted, duplicate_postcode_keys, family_counts
 
 
 def _populate_stage_open_roads(
@@ -1321,8 +1589,9 @@ def _populate_stage_open_roads(
             usrn,
             road_name,
             road_name_casefolded,
+            geom_bng,
             ingest_run_id
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, NULL, %s)
         ON CONFLICT (build_run_id, segment_id)
         DO UPDATE SET
             road_id = EXCLUDED.road_id,
@@ -1330,6 +1599,7 @@ def _populate_stage_open_roads(
             usrn = EXCLUDED.usrn,
             road_name = EXCLUDED.road_name,
             road_name_casefolded = EXCLUDED.road_name_casefolded,
+            geom_bng = EXCLUDED.geom_bng,
             ingest_run_id = EXCLUDED.ingest_run_id
         """
     )
@@ -1380,6 +1650,133 @@ def _populate_stage_open_roads(
             inserted += _flush_stage_batch(conn, insert_sql, payload)
 
     inserted += _flush_stage_batch(conn, insert_sql, payload)
+
+    payload_expr = sql.SQL("r.payload_jsonb")
+    segment_expr = _json_text_for_field(payload_expr, field_map, "segment_id")
+    geometry_expr = _json_text_for_field(payload_expr, field_map, "geometry")
+
+    with conn.cursor() as cur:
+        cur.execute(
+            sql.SQL(
+                """
+                WITH extracted AS (
+                    SELECT
+                        r.source_row_num,
+                        btrim({segment_expr}) AS segment_id_text,
+                        btrim({geometry_expr}) AS geometry_hex
+                    FROM raw.os_open_roads_row AS r
+                    WHERE r.ingest_run_id = %s
+                ),
+                dedup AS (
+                    SELECT DISTINCT ON (segment_id_text)
+                        segment_id_text,
+                        geometry_hex
+                    FROM extracted
+                    WHERE segment_id_text IS NOT NULL
+                      AND segment_id_text <> ''
+                    ORDER BY segment_id_text ASC, source_row_num DESC
+                ),
+                validated AS (
+                    SELECT
+                        d.segment_id_text,
+                        d.geometry_hex,
+                        decode(d.geometry_hex, 'hex') AS geom_blob
+                    FROM dedup AS d
+                    WHERE d.geometry_hex IS NOT NULL
+                      AND d.geometry_hex <> ''
+                      AND d.geometry_hex ~ '^[0-9A-Fa-f]+$'
+                      AND mod(length(d.geometry_hex), 2) = 0
+                ),
+                header AS (
+                    SELECT
+                        v.segment_id_text,
+                        v.geom_blob,
+                        get_byte(v.geom_blob, 3) AS flags,
+                        (
+                            get_byte(v.geom_blob, 4)
+                            + (get_byte(v.geom_blob, 5) * 256)
+                            + (get_byte(v.geom_blob, 6) * 65536)
+                            + (get_byte(v.geom_blob, 7) * 16777216)
+                        ) AS srid
+                    FROM validated AS v
+                ),
+                decoded AS (
+                    SELECT
+                        h.segment_id_text,
+                        ST_SetSRID(
+                            ST_GeomFromWKB(
+                                substring(
+                                    h.geom_blob
+                                    FROM (
+                                        8 + CASE ((h.flags >> 1) & 7)
+                                            WHEN 0 THEN 0
+                                            WHEN 1 THEN 32
+                                            WHEN 2 THEN 48
+                                            WHEN 3 THEN 48
+                                            WHEN 4 THEN 64
+                                            ELSE 0
+                                        END
+                                    ) + 1
+                                )
+                            ),
+                            h.srid
+                        ) AS geom_bng
+                    FROM header AS h
+                    WHERE h.srid = 27700
+                )
+                UPDATE stage.open_roads_segment AS s
+                SET geom_bng = d.geom_bng
+                FROM decoded AS d
+                WHERE s.build_run_id = %s
+                  AND s.segment_id = d.segment_id_text
+                """
+            ).format(segment_expr=segment_expr, geometry_expr=geometry_expr),
+            (ingest_run_id, build_run_id),
+        )
+
+    with conn.cursor() as cur:
+        cur.execute(
+            sql.SQL(
+                """
+                WITH extracted AS (
+                    SELECT
+                        btrim({geometry_expr}) AS geometry_hex
+                    FROM raw.os_open_roads_row AS r
+                    WHERE r.ingest_run_id = %s
+                ),
+                validated AS (
+                    SELECT
+                        decode(geometry_hex, 'hex') AS geom_blob
+                    FROM extracted
+                    WHERE geometry_hex IS NOT NULL
+                      AND geometry_hex <> ''
+                      AND geometry_hex ~ '^[0-9A-Fa-f]+$'
+                      AND mod(length(geometry_hex), 2) = 0
+                ),
+                srids AS (
+                    SELECT
+                        (
+                            get_byte(geom_blob, 4)
+                            + (get_byte(geom_blob, 5) * 256)
+                            + (get_byte(geom_blob, 6) * 65536)
+                            + (get_byte(geom_blob, 7) * 16777216)
+                        ) AS srid
+                    FROM validated
+                )
+                SELECT COUNT(*)::bigint
+                FROM srids
+                WHERE srid <> 27700
+                """
+            ).format(geometry_expr=geometry_expr),
+            (ingest_run_id,),
+        )
+        non_bng = int(cur.fetchone()[0] or 0)
+        if non_bng > 0:
+            raise BuildError(
+                "Open Roads geometry decode failed: non-BNG SRID detected "
+                f"for source run {ingest_run_id} rows={non_bng}"
+            )
+
     return inserted
 
 
@@ -1907,12 +2304,17 @@ def _pass_0b_stage_normalisation(
     if "os_open_names" in source_runs:
         field_map, required_fields = _mapped_fields_for_source(schema_config, "os_open_names")
         ingest_run_id = _single_source_run(source_runs, "os_open_names")
-        road_count, postcode_count, duplicate_postcode_keys = _populate_stage_open_names(
+        road_count, postcode_count, duplicate_postcode_keys, family_counts = _populate_stage_open_names(
             conn, build_run_id, ingest_run_id, field_map, required_fields
         )
         counts["stage.open_names_road_feature"] = road_count
         counts["stage.open_names_postcode_feature"] = postcode_count
         counts["qa.open_names_postcode_duplicate_keys"] = duplicate_postcode_keys
+        for family_name in sorted(family_counts.keys()):
+            counts[f"stage.open_names_{family_name}"] = int(family_counts[family_name])
+            counts[f"qa.open_names_feature_family_row_counts.{family_name}"] = int(
+                family_counts[family_name]
+            )
 
     if "os_open_roads" in source_runs:
         field_map, required_fields = _mapped_fields_for_source(schema_config, "os_open_roads")
@@ -2233,16 +2635,30 @@ def _pass_2_gb_canonical_streets(conn: psycopg.Connection, build_run_id: str) ->
                 src.street_name,
                 src.street_name_casefolded,
                 src.source_priority,
+                src.name_quality_rank,
+                src.name_quality_class,
                 COUNT(*)::bigint AS feature_count
             FROM (
                 SELECT
-                    n.toid,
+                    COALESCE(n.related_toid, n.feature_toid, n.toid) AS toid,
                     n.street_name_raw AS street_name,
                     n.street_name_casefolded,
-                    1::smallint AS source_priority
+                    1::smallint AS source_priority,
+                    CASE
+                        WHEN regexp_replace(upper(btrim(COALESCE(n.street_name_raw, ''))), '[[:space:]]+', ' ', 'g') = '' THEN 1::smallint
+                        WHEN regexp_replace(upper(btrim(COALESCE(n.street_name_raw, ''))), '[[:space:]]+', ' ', 'g') ~ %(road_number_pattern)s THEN 2::smallint
+                        WHEN regexp_replace(upper(btrim(COALESCE(n.street_name_raw, ''))), '[[:space:]]+', ' ', 'g') ~ '[A-Z]' THEN 0::smallint
+                        ELSE 1::smallint
+                    END AS name_quality_rank,
+                    CASE
+                        WHEN regexp_replace(upper(btrim(COALESCE(n.street_name_raw, ''))), '[[:space:]]+', ' ', 'g') = '' THEN 'unknown'
+                        WHEN regexp_replace(upper(btrim(COALESCE(n.street_name_raw, ''))), '[[:space:]]+', ' ', 'g') ~ %(road_number_pattern)s THEN 'road_number'
+                        WHEN regexp_replace(upper(btrim(COALESCE(n.street_name_raw, ''))), '[[:space:]]+', ' ', 'g') ~ '[A-Z]' THEN 'postal_plausible'
+                        ELSE 'unknown'
+                    END AS name_quality_class
                 FROM stage.open_names_road_feature AS n
                 WHERE n.build_run_id = %(build_run_id)s
-                  AND n.toid IS NOT NULL
+                  AND COALESCE(n.related_toid, n.feature_toid, n.toid) IS NOT NULL
 
                 UNION ALL
 
@@ -2250,7 +2666,19 @@ def _pass_2_gb_canonical_streets(conn: psycopg.Connection, build_run_id: str) ->
                     r.road_id AS toid,
                     r.road_name AS street_name,
                     r.road_name_casefolded,
-                    2::smallint AS source_priority
+                    2::smallint AS source_priority,
+                    CASE
+                        WHEN regexp_replace(upper(btrim(COALESCE(r.road_name, ''))), '[[:space:]]+', ' ', 'g') = '' THEN 1::smallint
+                        WHEN regexp_replace(upper(btrim(COALESCE(r.road_name, ''))), '[[:space:]]+', ' ', 'g') ~ %(road_number_pattern)s THEN 2::smallint
+                        WHEN regexp_replace(upper(btrim(COALESCE(r.road_name, ''))), '[[:space:]]+', ' ', 'g') ~ '[A-Z]' THEN 0::smallint
+                        ELSE 1::smallint
+                    END AS name_quality_rank,
+                    CASE
+                        WHEN regexp_replace(upper(btrim(COALESCE(r.road_name, ''))), '[[:space:]]+', ' ', 'g') = '' THEN 'unknown'
+                        WHEN regexp_replace(upper(btrim(COALESCE(r.road_name, ''))), '[[:space:]]+', ' ', 'g') ~ %(road_number_pattern)s THEN 'road_number'
+                        WHEN regexp_replace(upper(btrim(COALESCE(r.road_name, ''))), '[[:space:]]+', ' ', 'g') ~ '[A-Z]' THEN 'postal_plausible'
+                        ELSE 'unknown'
+                    END AS name_quality_class
                 FROM stage.open_roads_segment AS r
                 WHERE r.build_run_id = %(build_run_id)s
                   AND r.road_id IS NOT NULL
@@ -2259,9 +2687,14 @@ def _pass_2_gb_canonical_streets(conn: psycopg.Connection, build_run_id: str) ->
                 src.toid,
                 src.street_name,
                 src.street_name_casefolded,
-                src.source_priority
+                src.source_priority,
+                src.name_quality_rank,
+                src.name_quality_class
             """,
-            {"build_run_id": build_run_id},
+            {
+                "build_run_id": build_run_id,
+                "road_number_pattern": ROAD_NUMBER_PATTERN,
+            },
         )
         cur.execute(
             """
@@ -2279,6 +2712,7 @@ def _pass_2_gb_canonical_streets(conn: psycopg.Connection, build_run_id: str) ->
                 n.street_name_casefolded,
                 SUM(n.feature_count)::bigint AS evidence_count,
                 MIN(n.source_priority)::smallint AS source_priority,
+                MIN(n.name_quality_rank)::smallint AS name_quality_rank,
                 (ARRAY_AGG(lids.ingest_run_id ORDER BY lids.ingest_run_id::text ASC))[1] AS usrn_run_id
             FROM tmp_toid_name_counts AS n
             JOIN stage.open_lids_toid_usrn AS lids
@@ -2294,6 +2728,7 @@ def _pass_2_gb_canonical_streets(conn: psycopg.Connection, build_run_id: str) ->
                 ON tmp_inferred_name_counts (
                     usrn,
                     evidence_count DESC,
+                    name_quality_rank ASC,
                     source_priority ASC,
                     street_name_casefolded,
                     street_name
@@ -2302,7 +2737,31 @@ def _pass_2_gb_canonical_streets(conn: psycopg.Connection, build_run_id: str) ->
         )
         cur.execute(
             """
-            WITH inferred_usrn AS (
+            WITH prepared AS (
+                SELECT
+                    usrn,
+                    street_name,
+                    street_name_casefolded,
+                    evidence_count,
+                    source_priority,
+                    name_quality_rank,
+                    usrn_run_id,
+                    BOOL_OR(name_quality_rank = 0) OVER (PARTITION BY usrn) AS has_postal_plausible
+                FROM tmp_inferred_name_counts
+            ),
+            filtered AS (
+                SELECT
+                    usrn,
+                    street_name,
+                    street_name_casefolded,
+                    evidence_count,
+                    source_priority,
+                    name_quality_rank,
+                    usrn_run_id
+                FROM prepared
+                WHERE NOT (has_postal_plausible AND name_quality_rank = 2)
+            ),
+            inferred_usrn AS (
                 SELECT
                     usrn,
                     street_name,
@@ -2319,11 +2778,12 @@ def _pass_2_gb_canonical_streets(conn: psycopg.Connection, build_run_id: str) ->
                         ROW_NUMBER() OVER (
                             PARTITION BY usrn
                             ORDER BY evidence_count DESC,
+                                     name_quality_rank ASC,
                                      source_priority ASC,
                                      street_name_casefolded COLLATE "C" ASC,
                                      street_name COLLATE "C" ASC
                         ) AS rn
-                    FROM tmp_inferred_name_counts
+                    FROM filtered
                 ) AS ranked
                 WHERE rn = 1
             )
@@ -2364,7 +2824,39 @@ def _pass_2_gb_canonical_streets(conn: psycopg.Connection, build_run_id: str) ->
 def _pass_3_open_names_candidates(conn: psycopg.Connection, build_run_id: str) -> dict[str, int]:
     schema_config = _schema_config()
     _mapped_fields_for_source(schema_config, "os_open_names")
-    _mapped_fields_for_source(schema_config, "os_open_lids")
+    has_open_lids = _build_has_source(conn, build_run_id, "os_open_lids")
+    if has_open_lids:
+        _mapped_fields_for_source(schema_config, "os_open_lids")
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT COUNT(*)::bigint
+            FROM stage.open_names_road_feature
+            WHERE build_run_id = %s
+              AND postcode_norm IS NOT NULL
+            """,
+            (build_run_id,),
+        )
+        stage_open_names_rows = int(cur.fetchone()[0])
+        cur.execute(
+            """
+            SELECT COUNT(*)::bigint
+            FROM core.postcodes
+            WHERE produced_build_run_id = %s
+            """,
+            (build_run_id,),
+        )
+        core_postcode_rows = int(cur.fetchone()[0])
+
+    if stage_open_names_rows == 0:
+        return {
+            "derived.postcode_street_candidates_base": 0,
+            "derived.postcode_street_candidates_promoted": 0,
+            "derived.postcode_street_candidate_lineage": 0,
+            "qa.pass3_base_input_rows": 0,
+            "qa.pass3_skipped_no_open_names_rows": 1,
+        }
 
     with conn.cursor() as cur:
         cur.execute(
@@ -2385,121 +2877,146 @@ def _pass_3_open_names_candidates(conn: psycopg.Connection, build_run_id: str) -
             SELECT
                 %s,
                 p.postcode,
-                n.street_name_raw,
-                n.street_name_casefolded,
+                n.resolved_street_name_raw,
+                n.resolved_street_name_casefolded,
                 NULL,
                 'names_postcode_feature',
                 'medium',
-                'open_names:feature:' || n.feature_id,
+                'open_names:feature:' || n.resolved_feature_id,
                 'os_open_names',
-                n.ingest_run_id,
-                jsonb_build_object('feature_id', n.feature_id, 'toid', n.toid)
-            FROM stage.open_names_road_feature AS n
+                n.resolved_ingest_run_id,
+                jsonb_build_object(
+                    'feature_id', n.resolved_feature_id,
+                    'toid', n.resolved_toid,
+                    'related_toid', n.related_toid,
+                    'feature_toid', n.feature_toid
+                )
+            FROM (
+                SELECT
+                    feature_id AS resolved_feature_id,
+                    COALESCE(related_toid, feature_toid, toid) AS resolved_toid,
+                    related_toid,
+                    feature_toid,
+                    street_name_raw AS resolved_street_name_raw,
+                    street_name_casefolded AS resolved_street_name_casefolded,
+                    postcode_norm,
+                    ingest_run_id AS resolved_ingest_run_id
+                FROM stage.open_names_road_feature
+                WHERE build_run_id = %s
+            ) AS n
             JOIN core.postcodes AS p
               ON p.produced_build_run_id = %s
              AND replace(p.postcode, ' ', '') = n.postcode_norm
-            WHERE n.build_run_id = %s
-            ORDER BY n.feature_id COLLATE "C" ASC
+            ORDER BY n.resolved_feature_id COLLATE "C" ASC
             """,
             (build_run_id, build_run_id, build_run_id),
         )
-        base_inserted = cur.rowcount
+        base_inserted = int(cur.rowcount)
+
+    if stage_open_names_rows > 0 and core_postcode_rows > 0 and base_inserted == 0:
+        raise BuildError(
+            "Pass 3 produced zero base Open Names candidates despite staged input rows; "
+            "check postcode key alignment between stage.open_names_road_feature and core.postcodes"
+        )
 
     promotions_inserted = 0
     lineage_inserted = 0
 
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            CREATE TEMP TABLE tmp_pass3_promotions
-            ON COMMIT DROP AS
-            SELECT
-                ROW_NUMBER() OVER (
-                    ORDER BY parent.candidate_id ASC, lids.usrn ASC
-                )::bigint AS promotion_rank,
-                parent.candidate_id AS parent_candidate_id,
-                parent.postcode,
-                parent.street_name_raw,
-                parent.street_name_canonical,
-                parent.evidence_json ->> 'toid' AS toid,
-                lids.usrn,
-                lids.ingest_run_id
-            FROM derived.postcode_street_candidates AS parent
-            JOIN stage.open_lids_toid_usrn AS lids
-              ON lids.build_run_id = parent.produced_build_run_id
-             AND lids.toid = parent.evidence_json ->> 'toid'
-            WHERE parent.produced_build_run_id = %s
-              AND parent.candidate_type = 'names_postcode_feature'
-              AND parent.evidence_json ->> 'toid' IS NOT NULL
-            """,
-            (build_run_id,),
-        )
-        cur.execute("SELECT COUNT(*)::bigint FROM tmp_pass3_promotions")
-        promotions_inserted = int(cur.fetchone()[0])
-
-        if promotions_inserted > 0:
+    if has_open_lids:
+        with conn.cursor() as cur:
             cur.execute(
                 """
-                WITH inserted AS (
-                    INSERT INTO derived.postcode_street_candidates (
-                        produced_build_run_id,
-                        postcode,
-                        street_name_raw,
-                        street_name_canonical,
-                        usrn,
-                        candidate_type,
-                        confidence,
-                        evidence_ref,
-                        source_name,
-                        ingest_run_id,
-                        evidence_json
+                CREATE TEMP TABLE tmp_pass3_promotions
+                ON COMMIT DROP AS
+                SELECT
+                    ROW_NUMBER() OVER (
+                        ORDER BY parent.candidate_id ASC, lids.usrn ASC
+                    )::bigint AS promotion_rank,
+                    parent.candidate_id AS parent_candidate_id,
+                    parent.postcode,
+                    parent.street_name_raw,
+                    parent.street_name_canonical,
+                    parent.evidence_json ->> 'toid' AS toid,
+                    lids.usrn,
+                    lids.ingest_run_id
+                FROM derived.postcode_street_candidates AS parent
+                JOIN stage.open_lids_toid_usrn AS lids
+                  ON lids.build_run_id = parent.produced_build_run_id
+                 AND lids.toid = parent.evidence_json ->> 'toid'
+                WHERE parent.produced_build_run_id = %s
+                  AND parent.candidate_type = 'names_postcode_feature'
+                  AND parent.evidence_json ->> 'toid' IS NOT NULL
+                """,
+                (build_run_id,),
+            )
+            cur.execute("SELECT COUNT(*)::bigint FROM tmp_pass3_promotions")
+            promotions_inserted = int(cur.fetchone()[0])
+
+            if promotions_inserted > 0:
+                cur.execute(
+                    """
+                    WITH inserted AS (
+                        INSERT INTO derived.postcode_street_candidates (
+                            produced_build_run_id,
+                            postcode,
+                            street_name_raw,
+                            street_name_canonical,
+                            usrn,
+                            candidate_type,
+                            confidence,
+                            evidence_ref,
+                            source_name,
+                            ingest_run_id,
+                            evidence_json
+                        )
+                        SELECT
+                            %s,
+                            p.postcode,
+                            p.street_name_raw,
+                            p.street_name_canonical,
+                            p.usrn,
+                            'open_lids_toid_usrn',
+                            'high',
+                            'open_lids:toid_usrn:' || p.toid,
+                            'os_open_lids',
+                            p.ingest_run_id,
+                            jsonb_build_object('toid', p.toid, 'usrn', p.usrn)
+                        FROM tmp_pass3_promotions AS p
+                        ORDER BY p.promotion_rank ASC
+                        RETURNING candidate_id
+                    ),
+                    ranked_inserted AS (
+                        SELECT
+                            candidate_id,
+                            ROW_NUMBER() OVER (ORDER BY candidate_id ASC)::bigint AS promotion_rank
+                        FROM inserted
+                    )
+                    INSERT INTO derived.postcode_street_candidate_lineage (
+                        parent_candidate_id,
+                        child_candidate_id,
+                        relation_type,
+                        produced_build_run_id
                     )
                     SELECT
-                        %s,
-                        p.postcode,
-                        p.street_name_raw,
-                        p.street_name_canonical,
-                        p.usrn,
-                        'open_lids_toid_usrn',
-                        'high',
-                        'open_lids:toid_usrn:' || p.toid,
-                        'os_open_lids',
-                        p.ingest_run_id,
-                        jsonb_build_object('toid', p.toid, 'usrn', p.usrn)
+                        p.parent_candidate_id,
+                        i.candidate_id,
+                        'promotion_toid_usrn',
+                        %s
                     FROM tmp_pass3_promotions AS p
-                    ORDER BY p.promotion_rank ASC
-                    RETURNING candidate_id
-                ),
-                ranked_inserted AS (
-                    SELECT
-                        candidate_id,
-                        ROW_NUMBER() OVER (ORDER BY candidate_id ASC)::bigint AS promotion_rank
-                    FROM inserted
+                    JOIN ranked_inserted AS i
+                      ON i.promotion_rank = p.promotion_rank
+                    ON CONFLICT DO NOTHING
+                    """,
+                    (build_run_id, build_run_id),
                 )
-                INSERT INTO derived.postcode_street_candidate_lineage (
-                    parent_candidate_id,
-                    child_candidate_id,
-                    relation_type,
-                    produced_build_run_id
-                )
-                SELECT
-                    p.parent_candidate_id,
-                    i.candidate_id,
-                    'promotion_toid_usrn',
-                    %s
-                FROM tmp_pass3_promotions AS p
-                JOIN ranked_inserted AS i
-                  ON i.promotion_rank = p.promotion_rank
-                ON CONFLICT DO NOTHING
-                """,
-                (build_run_id, build_run_id),
-            )
-            lineage_inserted = int(cur.rowcount)
+                lineage_inserted = int(cur.rowcount)
 
     return {
         "derived.postcode_street_candidates_base": int(base_inserted),
         "derived.postcode_street_candidates_promoted": int(promotions_inserted),
         "derived.postcode_street_candidate_lineage": int(lineage_inserted),
+        "qa.pass3_base_input_rows": int(stage_open_names_rows),
+        "qa.pass3_skipped_no_open_names_rows": 0,
     }
 
 
@@ -2597,12 +3114,19 @@ def _pass_5_gb_spatial_fallback(conn: psycopg.Connection, build_run_id: str) -> 
     _mapped_fields_for_source(schema_config, "os_open_roads")
 
     with conn.cursor() as cur:
+        cur.execute("SET LOCAL work_mem = '256MB'")
         cur.execute(
             """
+            CREATE TEMP TABLE tmp_pass5_candidates
+            ON COMMIT DROP AS
             WITH gb_postcodes_without_high AS (
-                SELECT p.postcode, replace(p.postcode, ' ', '') AS postcode_norm
+                SELECT
+                    p.postcode,
+                    replace(p.postcode, ' ', '') AS postcode_norm,
+                    p.easting,
+                    p.northing
                 FROM core.postcodes AS p
-                WHERE p.produced_build_run_id = %s
+                WHERE p.produced_build_run_id = %(build_run_id)s
                   AND p.country_iso2 = 'GB'
                   AND NOT EXISTS (
                       SELECT 1
@@ -2612,23 +3136,279 @@ def _pass_5_gb_spatial_fallback(conn: psycopg.Connection, build_run_id: str) -> 
                         AND c.confidence = 'high'
                   )
             ),
-            ranked_segments AS (
+            postcode_points AS (
                 SELECT
                     g.postcode,
+                    g.postcode_norm,
+                    ST_SetSRID(
+                        ST_MakePoint(g.easting::double precision, g.northing::double precision),
+                        27700
+                    ) AS geom_bng
+                FROM gb_postcodes_without_high AS g
+                WHERE g.easting IS NOT NULL
+                  AND g.northing IS NOT NULL
+            ),
+            spatial_candidates AS (
+                SELECT
+                    p.postcode,
+                    p.postcode_norm,
                     r.segment_id,
                     r.usrn,
                     r.road_name,
                     r.road_name_casefolded,
                     r.ingest_run_id,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY g.postcode
-                        ORDER BY r.segment_id COLLATE "C" ASC
-                    ) AS rn
-                FROM gb_postcodes_without_high AS g
+                    ST_Distance(p.geom_bng, r.geom_bng)::double precision AS distance_m,
+                    true AS is_spatial
+                FROM postcode_points AS p
                 JOIN stage.open_roads_segment AS r
-                  ON r.build_run_id = %s
+                  ON r.build_run_id = %(build_run_id)s
+                 AND r.geom_bng IS NOT NULL
+                 AND ST_DWithin(p.geom_bng, r.geom_bng, %(radius_m)s)
+            ),
+            gb_without_spatial AS (
+                SELECT g.postcode, g.postcode_norm
+                FROM gb_postcodes_without_high AS g
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM spatial_candidates AS s
+                    WHERE s.postcode = g.postcode
+                )
+            ),
+            postcode_fallback_candidates AS (
+                SELECT
+                    g.postcode,
+                    g.postcode_norm,
+                    r.segment_id,
+                    r.usrn,
+                    r.road_name,
+                    r.road_name_casefolded,
+                    r.ingest_run_id,
+                    NULL::double precision AS distance_m,
+                    false AS is_spatial
+                FROM gb_without_spatial AS g
+                JOIN stage.open_roads_segment AS r
+                  ON r.build_run_id = %(build_run_id)s
                  AND r.postcode_norm = g.postcode_norm
+            ),
+            combined_candidates AS (
+                SELECT * FROM spatial_candidates
+                UNION ALL
+                SELECT * FROM postcode_fallback_candidates
             )
+            SELECT
+                c.postcode,
+                c.postcode_norm,
+                c.segment_id,
+                c.usrn,
+                c.road_name,
+                c.road_name_casefolded,
+                c.ingest_run_id,
+                c.distance_m,
+                c.is_spatial,
+                CASE
+                    WHEN regexp_replace(upper(btrim(COALESCE(c.road_name, ''))), '[[:space:]]+', ' ', 'g') = '' THEN 'unknown'
+                    WHEN regexp_replace(upper(btrim(COALESCE(c.road_name, ''))), '[[:space:]]+', ' ', 'g') ~ %(road_number_pattern)s THEN 'road_number'
+                    WHEN regexp_replace(upper(btrim(COALESCE(c.road_name, ''))), '[[:space:]]+', ' ', 'g') ~ '[A-Z]' THEN 'postal_plausible'
+                    ELSE 'unknown'
+                END AS name_quality_class,
+                CASE
+                    WHEN regexp_replace(upper(btrim(COALESCE(c.road_name, ''))), '[[:space:]]+', ' ', 'g') = '' THEN 'blank_or_null'
+                    WHEN regexp_replace(upper(btrim(COALESCE(c.road_name, ''))), '[[:space:]]+', ' ', 'g') ~ %(road_number_pattern)s THEN 'matched_uk_road_number_pattern'
+                    WHEN regexp_replace(upper(btrim(COALESCE(c.road_name, ''))), '[[:space:]]+', ' ', 'g') ~ '[A-Z]' THEN 'not_road_number_pattern'
+                    ELSE 'not_road_number_pattern'
+                END AS name_quality_reason,
+                CASE
+                    WHEN regexp_replace(upper(btrim(COALESCE(c.road_name, ''))), '[[:space:]]+', ' ', 'g') = '' THEN 1::smallint
+                    WHEN regexp_replace(upper(btrim(COALESCE(c.road_name, ''))), '[[:space:]]+', ' ', 'g') ~ %(road_number_pattern)s THEN 2::smallint
+                    WHEN regexp_replace(upper(btrim(COALESCE(c.road_name, ''))), '[[:space:]]+', ' ', 'g') ~ '[A-Z]' THEN 0::smallint
+                    ELSE 1::smallint
+                END AS name_quality_rank,
+                0::smallint AS ppd_match_score,
+                NULL::text AS ppd_matched_street,
+                'none'::text AS ppd_match_type
+            FROM combined_candidates AS c
+            """,
+            {
+                "build_run_id": build_run_id,
+                "radius_m": PASS5_SPATIAL_RADIUS_M,
+                "road_number_pattern": ROAD_NUMBER_PATTERN,
+            },
+        )
+        cur.execute(
+            """
+            CREATE INDEX idx_tmp_pass5_candidates_postcode
+                ON tmp_pass5_candidates (postcode)
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX idx_tmp_pass5_candidates_postcode_norm
+                ON tmp_pass5_candidates (postcode_norm)
+            """
+        )
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                COUNT(*)::bigint FILTER (WHERE name_quality_class = 'postal_plausible'),
+                COUNT(*)::bigint FILTER (WHERE name_quality_class = 'road_number')
+            FROM tmp_pass5_candidates
+            """
+        )
+        candidate_postal_plausible, candidate_road_number = (int(value or 0) for value in cur.fetchone())
+
+    ppd_enabled = (
+        _env_flag_enabled("PIPELINE_PASS5_ENABLE_PPD_TIE_BREAK", True)
+        and _build_has_source(conn, build_run_id, "ppd")
+    )
+    if ppd_enabled:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT COUNT(*)::bigint
+                FROM stage.ppd_parsed_address
+                WHERE build_run_id = %s
+                """,
+                (build_run_id,),
+            )
+            ppd_enabled = int(cur.fetchone()[0] or 0) > 0
+
+    if ppd_enabled:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TEMP TABLE tmp_pass5_ppd_tokens
+                ON COMMIT DROP AS
+                SELECT DISTINCT
+                    postcode_norm,
+                    street_token_raw,
+                    street_token_casefolded
+                FROM stage.ppd_parsed_address
+                WHERE build_run_id = %s
+                """,
+                (build_run_id,),
+            )
+            cur.execute(
+                """
+                CREATE INDEX idx_tmp_pass5_ppd_tokens_postcode
+                    ON tmp_pass5_ppd_tokens (postcode_norm, street_token_casefolded)
+                """
+            )
+            cur.execute(
+                """
+                WITH scored AS (
+                    SELECT
+                        c.postcode,
+                        c.segment_id,
+                        CASE
+                            WHEN p.street_token_casefolded = c.road_name_casefolded THEN 2::smallint
+                            WHEN p.street_token_casefolded IS NOT NULL
+                                 AND (
+                                     p.street_token_casefolded LIKE c.road_name_casefolded || ' %%'
+                                     OR c.road_name_casefolded LIKE p.street_token_casefolded || ' %%'
+                                     OR position(c.road_name_casefolded in p.street_token_casefolded) > 0
+                                     OR position(p.street_token_casefolded in c.road_name_casefolded) > 0
+                                 ) THEN 1::smallint
+                            ELSE 0::smallint
+                        END AS match_score,
+                        CASE
+                            WHEN p.street_token_casefolded = c.road_name_casefolded THEN 'exact'
+                            WHEN p.street_token_casefolded IS NOT NULL
+                                 AND (
+                                     p.street_token_casefolded LIKE c.road_name_casefolded || ' %%'
+                                     OR c.road_name_casefolded LIKE p.street_token_casefolded || ' %%'
+                                     OR position(c.road_name_casefolded in p.street_token_casefolded) > 0
+                                     OR position(p.street_token_casefolded in c.road_name_casefolded) > 0
+                                 ) THEN 'partial'
+                            ELSE 'none'
+                        END AS match_type,
+                        p.street_token_raw AS matched_street,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY c.postcode, c.segment_id
+                            ORDER BY
+                                CASE
+                                    WHEN p.street_token_casefolded = c.road_name_casefolded THEN 2::smallint
+                                    WHEN p.street_token_casefolded IS NOT NULL
+                                         AND (
+                                             p.street_token_casefolded LIKE c.road_name_casefolded || ' %%'
+                                             OR c.road_name_casefolded LIKE p.street_token_casefolded || ' %%'
+                                             OR position(c.road_name_casefolded in p.street_token_casefolded) > 0
+                                             OR position(p.street_token_casefolded in c.road_name_casefolded) > 0
+                                         ) THEN 1::smallint
+                                    ELSE 0::smallint
+                                END DESC,
+                                length(COALESCE(p.street_token_casefolded, '')) DESC,
+                                COALESCE(p.street_token_casefolded, '') COLLATE "C" ASC
+                        ) AS rn
+                    FROM tmp_pass5_candidates AS c
+                    LEFT JOIN tmp_pass5_ppd_tokens AS p
+                      ON p.postcode_norm = c.postcode_norm
+                )
+                UPDATE tmp_pass5_candidates AS c
+                SET
+                    ppd_match_score = s.match_score,
+                    ppd_match_type = s.match_type,
+                    ppd_matched_street = CASE WHEN s.match_score > 0 THEN s.matched_street ELSE NULL END
+                FROM scored AS s
+                WHERE s.rn = 1
+                  AND c.postcode = s.postcode
+                  AND c.segment_id = s.segment_id
+                """
+            )
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            CREATE TEMP TABLE tmp_pass5_ranked
+            ON COMMIT DROP AS
+            WITH policy AS (
+                SELECT
+                    c.*,
+                    BOOL_OR(c.name_quality_class = 'postal_plausible') OVER (
+                        PARTITION BY c.postcode
+                    ) AS has_postal_plausible
+                FROM tmp_pass5_candidates AS c
+            ),
+            eligible AS (
+                SELECT
+                    p.*
+                FROM policy AS p
+                WHERE NOT (
+                    p.has_postal_plausible
+                    AND p.name_quality_class = 'road_number'
+                )
+            )
+            SELECT
+                e.*,
+                ROW_NUMBER() OVER (
+                    PARTITION BY e.postcode
+                    ORDER BY
+                        e.name_quality_rank ASC,
+                        e.ppd_match_score DESC,
+                        e.distance_m ASC NULLS LAST,
+                        e.segment_id COLLATE "C" ASC
+                ) AS rn
+            FROM eligible AS e
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX idx_tmp_pass5_ranked_postcode_rn
+                ON tmp_pass5_ranked (postcode, rn)
+            """
+        )
+        cur.execute(
+            """
+            SELECT COUNT(DISTINCT postcode)::bigint
+            FROM tmp_pass5_ranked
+            """
+        )
+        postcodes_with_candidates = int(cur.fetchone()[0] or 0)
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
             INSERT INTO derived.postcode_street_candidates (
                 produced_build_run_id,
                 postcode,
@@ -2653,16 +3433,97 @@ def _pass_5_gb_spatial_fallback(conn: psycopg.Connection, build_run_id: str) -> 
                 'spatial:os_open_roads:' || rs.segment_id || ':fallback',
                 'os_open_roads',
                 rs.ingest_run_id,
-                jsonb_build_object('segment_id', rs.segment_id)
-            FROM ranked_segments AS rs
+                jsonb_build_object(
+                    'segment_id', rs.segment_id,
+                    'distance_m', rs.distance_m,
+                    'name_quality_class', rs.name_quality_class,
+                    'name_quality_reason', rs.name_quality_reason,
+                    'fallback_policy', 'postal_name_preferred',
+                    'ppd_match_score', rs.ppd_match_score,
+                    'ppd_matched_street', rs.ppd_matched_street,
+                    'tie_break_basis', %s,
+                    'road_number_only_output', (rs.name_quality_class = 'road_number')
+                )
+            FROM tmp_pass5_ranked AS rs
             WHERE rs.rn = 1
             ORDER BY rs.postcode COLLATE "C" ASC
             """,
-            (build_run_id, build_run_id, build_run_id),
+            (
+                build_run_id,
+                "postal_name_then_ppd_then_distance"
+                if ppd_enabled
+                else "postal_name_then_distance",
+            ),
         )
-        inserted = cur.rowcount
+        inserted = int(cur.rowcount)
 
-    return {"derived.postcode_street_candidates_spatial_os_open_roads": int(inserted)}
+    if postcodes_with_candidates > 0 and inserted == 0:
+        raise BuildError(
+            "Pass 5 produced zero fallback winners despite available candidates; "
+            "check pass-5 ranking and candidate filtering logic"
+        )
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                COUNT(*)::bigint FILTER (WHERE rn = 1 AND name_quality_class = 'road_number'),
+                COUNT(*)::bigint FILTER (WHERE rn = 1 AND ppd_match_type = 'exact'),
+                COUNT(*)::bigint FILTER (WHERE rn = 1 AND ppd_match_type = 'partial'),
+                COUNT(*)::bigint FILTER (WHERE rn = 1 AND ppd_match_type = 'none')
+            FROM tmp_pass5_ranked
+            """
+        )
+        (
+            road_number_only_wins,
+            ppd_match_exact_count,
+            ppd_match_partial_count,
+            ppd_match_none_count,
+        ) = (int(value or 0) for value in cur.fetchone())
+
+        cur.execute(
+            """
+            SELECT COUNT(*)::bigint
+            FROM (
+                SELECT winner.postcode
+                FROM tmp_pass5_ranked AS winner
+                WHERE winner.rn = 1
+                  AND EXISTS (
+                      SELECT 1
+                      FROM tmp_pass5_ranked AS peer
+                      WHERE peer.postcode = winner.postcode
+                        AND peer.rn > 1
+                        AND peer.name_quality_rank = winner.name_quality_rank
+                  )
+                  AND winner.ppd_match_score > COALESCE((
+                      SELECT MAX(peer.ppd_match_score)
+                      FROM tmp_pass5_ranked AS peer
+                      WHERE peer.postcode = winner.postcode
+                        AND peer.rn > 1
+                        AND peer.name_quality_rank = winner.name_quality_rank
+                  ), -1)
+            ) AS t
+            """
+        )
+        ppd_tie_break_applied_count = int(cur.fetchone()[0] or 0)
+
+    if not ppd_enabled:
+        ppd_match_exact_count = 0
+        ppd_match_partial_count = 0
+        ppd_match_none_count = 0
+        ppd_tie_break_applied_count = 0
+
+    return {
+        "derived.postcode_street_candidates_spatial_os_open_roads": int(inserted),
+        "pass5_candidates_postal_plausible": int(candidate_postal_plausible),
+        "pass5_candidates_road_number": int(candidate_road_number),
+        "pass5_road_number_only_wins": int(road_number_only_wins),
+        "pass5_ppd_tie_break_enabled": 1 if ppd_enabled else 0,
+        "pass5_ppd_tie_break_applied_count": int(ppd_tie_break_applied_count),
+        "pass5_ppd_match_exact_count": int(ppd_match_exact_count),
+        "pass5_ppd_match_partial_count": int(ppd_match_partial_count),
+        "pass5_ppd_match_none_count": int(ppd_match_none_count),
+    }
 
 
 def _pass_6_ni_candidates(conn: psycopg.Connection, build_run_id: str) -> dict[str, int]:
