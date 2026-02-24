@@ -12,6 +12,7 @@ Rules:
 - Do not guess dataset structure.
 - Persist release metadata and checksums in manifests.
 - Verify hashes before ingest.
+- Use repository-relative `file_path` values in manifests (no absolute local filesystem paths).
 - If a source does not provide an official release identifier, record that as `Unknown` and derive a deterministic local release token from retrieval date + published hash.
 
 ## 0. Source Registry
@@ -333,7 +334,7 @@ For each dataset manifest:
 1. `dataset_key` is correct (`onsud`, `open_uprn`, `open_roads`, `open_names`)
 2. `release_id` follows rules above
 3. `source_url` is the exact URL used to download
-4. `file_path` points to the local extracted file used for ingest
+4. `file_path` points to the local extracted file used for ingest and is repository-relative
 5. `expected_sha256` equals `shasum -a 256 <file>`
 6. `column_map` is explicit and validated from inspected headers/layers
 7. For Open Roads, `layer_name` is set and validated via `ogrinfo`

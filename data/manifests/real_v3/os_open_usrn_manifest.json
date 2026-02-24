@@ -8,7 +8,7 @@
   "files": [
     {
       "file_role": "open_usrn_gpkg",
-      "file_path": "/Users/jamie/code/postcod.es/data/source_files/real/open_usrn/osopenusrn_202602.gpkg",
+      "file_path": "data/source_files/real/open_usrn/osopenusrn_202602.gpkg",
       "sha256": "fdd6af3efa38ad116d4c7cf436291c4094f654d6f2aaeb218c7bdd862356828e",
       "size_bytes": 1005912064,
       "format": "gpkg",

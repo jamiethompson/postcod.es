@@ -133,13 +133,31 @@ def _parse_utc_datetime(value: str, field_name: str) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
-def _parse_file_entry(entry: dict[str, Any]) -> SourceFileManifest:
+def _find_repo_root(path: Path) -> Path | None:
+    for candidate in (path, *path.parents):
+        if (candidate / ".git").exists():
+            return candidate
+    return None
+
+
+def _parse_file_entry(
+    entry: dict[str, Any],
+    manifest_path: Path,
+    repo_root: Path | None,
+) -> SourceFileManifest:
     if not isinstance(entry, dict):
         raise ManifestError("Each files[] entry must be an object")
 
     file_role = _require_string(entry, "file_role")
     file_path_value = _require_string(entry, "file_path")
-    file_path = Path(file_path_value).expanduser().resolve()
+    raw_file_path = Path(file_path_value).expanduser()
+    if raw_file_path.is_absolute():
+        file_path = raw_file_path.resolve()
+    else:
+        candidates = [(manifest_path.parent / raw_file_path).resolve()]
+        if repo_root is not None:
+            candidates.append((repo_root / raw_file_path).resolve())
+        file_path = next((candidate for candidate in candidates if candidate.is_file()), candidates[0])
     if not file_path.exists() or not file_path.is_file():
         raise ManifestError(f"Manifest file_path does not exist: {file_path}")
 
@@ -175,7 +193,9 @@ def _parse_file_entry(entry: dict[str, Any]) -> SourceFileManifest:
 
 
 def load_source_manifest(path: Path) -> SourceIngestManifest:
-    payload = _load_json(path)
+    manifest_path = path.resolve()
+    repo_root = _find_repo_root(manifest_path.parent)
+    payload = _load_json(manifest_path)
 
     source_name = _require_string(payload, "source_name")
     if source_name not in SOURCE_NAMES:
@@ -196,7 +216,7 @@ def load_source_manifest(path: Path) -> SourceIngestManifest:
     if not isinstance(files_raw, list) or not files_raw:
         raise ManifestError("Manifest files must be a non-empty array")
 
-    files = tuple(_parse_file_entry(entry) for entry in files_raw)
+    files = tuple(_parse_file_entry(entry, manifest_path, repo_root) for entry in files_raw)
 
     return SourceIngestManifest(
         source_name=source_name,

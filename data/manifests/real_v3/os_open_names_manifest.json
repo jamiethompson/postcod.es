@@ -8,7 +8,7 @@
   "files": [
     {
       "file_role": "open_names_csv",
-      "file_path": "/Users/jamie/code/postcod.es/data/source_files/real/open_names/opname_gb_combined.csv",
+      "file_path": "data/source_files/real/open_names/opname_gb_combined.csv",
       "sha256": "aefc8ad337e23f1ba7debab45243c2dc2302a4aa95ef7c86d80daaa65f535e05",
       "size_bytes": 1802306070,
       "format": "csv"
